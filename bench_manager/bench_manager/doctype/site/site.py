@@ -273,7 +273,7 @@ def create_site(site_name, install_erpnext, mysql_password, admin_password, key,
 	commands = [
 		"bench new-site --mariadb-root-password {mysql_password} --admin-password {admin_password} --no-mariadb-socket {site_name}".format(
 			site_name=site_name, admin_password=admin_password, mysql_password=mysql_password
-		)
+		),
 	]
 	if install_erpnext == "true":
 		with open("apps.txt", "r") as f:
@@ -292,6 +292,7 @@ def create_site(site_name, install_erpnext, mysql_password, admin_password, key,
 		site_name = site_name,
 		is_async = a_async
 	)
+	return {"status": "queued", "site_name": site_name, "key": key}
 
 def jop_site_creation(commands, doctype, key,site_name):
     from bench_manager.bench_manager.utils import run_command

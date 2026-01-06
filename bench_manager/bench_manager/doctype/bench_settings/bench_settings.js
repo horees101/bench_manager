@@ -57,38 +57,59 @@ frappe.ui.form.on('Bench Settings', {
 								label: 'MySQL Password', reqd: r['message']['condition'][1] != 'T',
 								default: r['message']['root_password'], depends_on: `eval:${String(r['message']['condition'][1] != 'T')}`}
 						],
-					});
-					dialog.set_primary_action(__("Create"), () => {
-						let key = frappe.datetime.get_datetime_as_string();
-						let install_erpnext;
-						if (dialog.fields_dict.install_erpnext.last_value != 1){
-							install_erpnext = "false";
-						} else {
-							install_erpnext = "true";
+						});
+						dialog.set_primary_action(__("Create"), () => {
+							let key = frappe.datetime.get_datetime_as_string();
+							const site_name = (dialog.fields_dict.site_name.value || "").trim();
+							if (!site_name) {
+								frappe.msgprint(__('Please enter a site name.'));
+								return;
+							}
+							let install_erpnext;
+							if (dialog.fields_dict.install_erpnext.last_value != 1){
+								install_erpnext = "false";
+							} else {
+								install_erpnext = "true";
 						}
 						frappe.call({
 							method: 'bench_manager.bench_manager.doctype.site.site.verify_password',
-							args: {
-								site_name: dialog.fields_dict.site_name.value,
-								mysql_password: dialog.fields_dict.mysql_password.value
-							},
-							callback: function(r){
-								if (r.message == "console"){
-									console_dialog(key);
-									frappe.call({
-										method: 'bench_manager.bench_manager.doctype.site.site.create_site',
-										args: {
-											site_name: dialog.fields_dict.site_name.value,
-											admin_password: dialog.fields_dict.admin_password.value,
-											mysql_password: dialog.fields_dict.mysql_password.value,
-											install_erpnext: install_erpnext,
-											key: key
+								args: {
+									site_name: site_name,
+									mysql_password: dialog.fields_dict.mysql_password.value
+								},
+								callback: function(r){
+									if (r.message == "console"){
+										if (typeof window.console_dialog !== "function") {
+											frappe.msgprint(__('Console output could not be started. Please reload the page and try again.'));
+											return;
 										}
-									});
-									dialog.hide();
-								} 
-							}
-						});
+										window.console_dialog(key);
+										frappe.call({
+											method: 'bench_manager.bench_manager.doctype.site.site.create_site',
+											args: {
+												site_name: site_name,
+												admin_password: dialog.fields_dict.admin_password.value,
+												mysql_password: dialog.fields_dict.mysql_password.value,
+												install_erpnext: install_erpnext,
+												key: key
+											},
+											freeze: true,
+											callback: function(response) {
+												if (response.message && response.message.status) {
+													frappe.show_alert({
+														message: __('Site creation queued for {0}', [site_name]),
+														indicator: 'green'
+													});
+												}
+											},
+											error: function(err) {
+												frappe.msgprint(err.message || __('Unable to start site creation.'));
+											}
+										});
+										dialog.hide();
+									} 
+								}
+							});
 					});
 					dialog.show();
 				}
