@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: bench_manager
+Version: 0.0.1
+Summary: GUI for using bench commands 
+Author: Frappe
+Author-email: info@frappe.io
+Requires-Dist: frappe
+Dynamic: author
+Dynamic: author-email
+Dynamic: requires-dist
+Dynamic: summary
