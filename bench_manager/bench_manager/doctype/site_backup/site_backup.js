@@ -33,11 +33,20 @@ frappe.ui.form.on('Site Backup', {
 						],
 					});
 					dialog_data.set_primary_action(__("Verify"), () => {
+						const restoring_to_new_site = dialog_data.get_value('on_a_new_site') === 1;
+						if (restoring_to_new_site && !dialog_data.fields_dict.new_site_name.get_input_value()) {
+							frappe.msgprint(__('Please enter a site name for the new site.'));
+							return;
+						}
+						if (!restoring_to_new_site && !dialog_data.fields_dict.existing_sites.get_input_value()) {
+							frappe.msgprint(__('Please select a target site.'));
+							return;
+						}
 						frappe.call({
 							method: 'bench_manager.bench_manager.doctype.site.site.pass_exists',
 							args: {
 								doctype: frm.doctype,
-								docname: dialog_data.fields_dict.on_a_new_site.last_value != 1 ? '' : dialog_data.fields_dict.existing_sites.get_input_value()
+								docname: restoring_to_new_site ? '' : dialog_data.fields_dict.existing_sites.get_input_value()
 							},
 							btn: this,
 							callback: function(r){
@@ -57,7 +66,7 @@ frappe.ui.form.on('Site Backup', {
 									frappe.call({
 										method: 'bench_manager.bench_manager.doctype.site.site.verify_password',
 										args: {
-											site_name: dialog_data.fields_dict.on_a_new_site.last_value != 1 ? '' : dialog_data.fields_dict.existing_sites.get_input_value(),
+											site_name: restoring_to_new_site ? '' : dialog_data.fields_dict.existing_sites.get_input_value(),
 											mysql_password: verification_dialog.fields_dict.mysql_password.value
 										},
 										callback: function(r){
@@ -69,9 +78,9 @@ frappe.ui.form.on('Site Backup', {
 													args: {
 														doctype: frm.doctype,
 														docname: frm.doc.name,
-														on_a_new_site: dialog_data.fields_dict.on_a_new_site.last_value,
-														existing_site: dialog_data.fields_dict.existing_sites.get_input_value(),
-														new_site_name: dialog_data.fields_dict.new_site_name.get_input_value(),
+														on_a_new_site: restoring_to_new_site ? '1' : '0',
+														existing_site: restoring_to_new_site ? '' : dialog_data.fields_dict.existing_sites.get_input_value(),
+														new_site_name: restoring_to_new_site ? dialog_data.fields_dict.new_site_name.get_input_value() : '',
 														mysql_password: verification_dialog.fields_dict.mysql_password.value,
 														admin_password: verification_dialog.fields_dict.admin_password.value,
 														key: key

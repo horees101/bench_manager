@@ -4,32 +4,19 @@
 
 import json
 import os
-import shlex
 import sys
-from subprocess import PIPE, Popen, check_output
-from datetime import datetime,timedelta
 import traceback
-import frappe
-import frappe
-import shlex
-import re
-from subprocess import PIPE, STDOUT, Popen
-from bench_manager.bench_manager.utils import _close_the_doc
-from bench_manager.bench_manager.utils import safe_decode
+from datetime import datetime, timedelta
+from subprocess import check_output
 from urllib.parse import parse_qs, urlparse
 
+import dropbox
 import frappe
 from bench_manager.bench_manager.utils import (
+	run_command,
 	safe_decode,
 	verify_whitelisted_call,
 )
-from frappe.model.document import Document
-import json
-import os
-import dropbox
-from rq.timeouts import JobTimeoutException
-
-import frappe
 from frappe import _
 from frappe.integrations.offsite_backup_utils import (
 	get_chunk_site,
@@ -131,12 +118,12 @@ def sync_sites():
 	create_sites = list(set(site_dirs) - set(site_entries))
 	delete_sites = list(set(site_entries) - set(site_dirs))
 
-	for site in create_sites:
+	for site in sorted(create_sites):
 		doc = frappe.get_doc({"doctype": "Site", "site_name": site, "developer_flag": 1})
 		doc.insert()
 		frappe.db.commit()
 
-	for site in delete_sites:
+	for site in sorted(delete_sites):
 		doc = frappe.get_doc("Site", site)
 		doc.developer_flag = 1
 		doc.save()
@@ -186,14 +173,15 @@ def update_app_list():
 
 
 def update_site_list():
+	sites_path = os.path.abspath(os.path.join("..", "sites"))
+	if not os.path.isdir(sites_path):
+		return []
+
 	site_list = []
-	for root, dirs, files in os.walk(".", topdown=True):
-		for name in files:
-			if name == "site_config.json":
-				site_list.append(str(root).strip("./"))
-				break
-	if "" in site_list:
-		site_list.remove("")
+	for name in sorted(os.listdir(sites_path)):
+		site_path = os.path.join(sites_path, name)
+		if os.path.isfile(os.path.join(site_path, "site_config.json")):
+			site_list.append(name)
 	return site_list
 
 
@@ -208,8 +196,30 @@ def sync_backups():
 	]
 	create_backups = list(set(backup_dirs) - set(backup_entries))
 	delete_backups = list(set(backup_entries) - set(backup_dirs))
+	backup_data_map = {
+		x["date"] + " " + x["time"] + " " + x["site_name"] + " " + x["stored_location"]: x
+		for x in backup_dirs_data
+	}
 
-	for date_time_sitename_loc in create_backups:
+	for backup in sorted(set(backup_entries).intersection(set(backup_dirs))):
+		data = backup_data_map[backup]
+		doc = frappe.get_doc("Site Backup", backup)
+		doc.update(
+			{
+				"site_name": data["site_name"],
+				"date": data["date"],
+				"time": data["time"],
+				"stored_location": data["stored_location"],
+				"public_file_backup": data["public_file_backup"],
+				"private_file_backup": data["private_file_backup"],
+				"hash": data["hash"],
+				"file_path": data["file_path"],
+			}
+		)
+		doc.save()
+		frappe.db.commit()
+
+	for date_time_sitename_loc in sorted(create_backups):
 		date_time_sitename_loc = date_time_sitename_loc.split(" ")
 		backup = {}
 		for x in backup_dirs_data:
@@ -238,7 +248,7 @@ def sync_backups():
 		doc.insert()
 		frappe.db.commit()
 
-	for backup in delete_backups:
+	for backup in sorted(delete_backups):
 		doc = frappe.get_doc("Site Backup", backup)
 		doc.developer_flag = 1
 		doc.save()
@@ -247,48 +257,34 @@ def sync_backups():
 		frappe.db.commit()
 
 def update_backup_list():
-	all_sites = []
-	archived_sites = []
-	sites = []
-	for root, dirs, files in os.walk("../archived_sites/", topdown=True):
-		archived_sites.extend(dirs)
-		break
-	archived_sites = ["../archived_sites/" + x for x in archived_sites]
-	all_sites.extend(archived_sites)
-	for root, dirs, files in os.walk("../sites/", topdown=True):
-		for site in dirs:
-			if os.path.isfile("../sites/{}/site_config.json".format(site)):
-				sites.append(site)
-		break
-	sites = ["../sites/" + x for x in sites]
-	all_sites.extend(sites)
-
 	response = []
+	site_list = update_site_list()
 
-	backups = []
-	for site in all_sites:
-		backup_path = os.path.join(site, "private", "backups")
-		backup_files = (
-			safe_decode(
-				check_output(shlex.split("ls ./{backup_path}".format(backup_path=backup_path)))
-			)
-			.strip("\n")
-			.split("\n")
-		)
-		backup_files = [file for file in backup_files if "database.sql" in file]
-		for backup_file in backup_files:
-			inner_response = {}
-			date_time_hash = backup_file.rsplit("-", 1)[0]
-			file_path = backup_path + "/" + date_time_hash
-			inner_response["site_name"] = site.split("/")[2]
-			inner_response["stored_location"] = site.split("/")[1]
-			inner_response["private_file_backup"] = os.path.isfile(
-				backup_path + "/" + date_time_hash + "_private_files.tar"
-			)
-			inner_response["public_file_backup"] = os.path.isfile(
-				backup_path + "/" + date_time_hash + "_files.tar"
-			)
-			inner_response["file_path"] = file_path[3:]
+	for site in site_list:
+		backup_path = os.path.join("..", "sites", site, "private", "backups")
+		if not os.path.isdir(backup_path):
+			continue
+
+		for backup_file in sorted(os.listdir(backup_path)):
+			date_time_hash = None
+			if backup_file.endswith("-database.sql.gz"):
+				date_time_hash = backup_file[: -len("-database.sql.gz")]
+			elif backup_file.endswith("-database.sql"):
+				date_time_hash = backup_file[: -len("-database.sql")]
+			else:
+				continue
+
+			file_path = os.path.join("sites", site, "private", "backups", date_time_hash)
+			inner_response = {
+				"site_name": site,
+				"stored_location": "sites",
+				"private_file_backup": os.path.isfile(
+					os.path.join("..", file_path + "_private_files.tar")
+				),
+				"public_file_backup": os.path.isfile(os.path.join("..", file_path + "_files.tar")),
+				"file_path": file_path,
+			}
+
 			try:
 				inner_response["date"] = get_date(date_time_hash)
 				inner_response["time"] = get_time(date_time_hash)
@@ -298,6 +294,7 @@ def update_backup_list():
 				inner_response["time"] = str(datetime.now().time())
 				inner_response["hash"] = " "
 				traceback.print_exception(*sys.exc_info())
+
 			response.append(inner_response)
 	return response
 
@@ -321,17 +318,15 @@ def sync_all(in_background=False):
 		frappe.msgprint("Sync has started and will run in the background...")
 	verify_whitelisted_call()
 	frappe.enqueue(
-		"bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_sites"
+		"bench_manager.bench_manager.doctype.bench_settings.bench_settings._run_sync_all"
 	)
-	frappe.enqueue(
-		"bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_apps"
-	)
-	frappe.enqueue(
-		"bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_backups"
-	)
-	frappe.set_value(
-		"Bench Settings", None, "last_sync_timestamp", frappe.utils.time.time()
-	)
+
+
+def _run_sync_all():
+	sync_sites()
+	sync_apps()
+	sync_backups()
+	frappe.set_value("Bench Settings", None, "last_sync_timestamp", frappe.utils.time.time())
 
 
 @frappe.whitelist()
@@ -343,67 +338,6 @@ def setup_and_restart_nginx(root_password):
 	]
     commands.append(f"echo '{root_password}' | sudo -S service nginx restart")
     run_command(commands,"Bench Settings",dt_string)
-    
-def run_command(commands, doctype, key, cwd="..", docname=" ", after_command=None):
-	start_time = frappe.utils.time.time()
-	console_dump = ""
-	logged_command = " && ".join(commands)
-	logged_command += (
-		" "  # to make sure passwords at the end of the commands are also hidden
-	)
-	sensitive_data = ["--mariadb-root-password", "--admin-password", "--root-password"]
-	for password in sensitive_data:
-		logged_command = re.sub("{password} .*? ".format(password=password), "", logged_command, flags=re.DOTALL)
-	the_password = logged_command.split("'")[1].split("'")[0]
-	logged_command = logged_command.replace(the_password,"******")
-	doc = frappe.get_doc(
-		{
-			"doctype": "Bench Manager Command",
-			"key": key,
-			"source": doctype + ": " + docname,
-			"command": logged_command,
-			"status": "Ongoing",
-		}
-	)
-	doc.insert()
-	frappe.db.commit()
-	frappe.publish_realtime(
-		key,
-		"Executing Command:\n{logged_command}\n\n".format(logged_command=logged_command),
-		user=frappe.session.user,
-	)
-	try:
-		for command in commands:
-			terminal = Popen(
-				shlex.split(command), stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=cwd
-			)
-			for c in iter(lambda: safe_decode(terminal.stdout.read(1)), ""):
-				frappe.publish_realtime(key, c, user=frappe.session.user)
-		if terminal.wait():
-			_close_the_doc(
-				start_time, key, console_dump, status="Failed", user=frappe.session.user
-			)
-		else:
-			_close_the_doc(
-				start_time, key, console_dump, status="Success", user=frappe.session.user
-			)
-	except Exception as e:
-		_close_the_doc(
-			start_time,
-			key,
-			status="Failed",
-			user=frappe.session.user,
-		)
-	finally:
-		frappe.db.commit()
-		# hack: frappe.db.commit() to make sure the log created is robust,
-		# and the _refresh throws an error if the doc is deleted
-		frappe.enqueue(
-			"bench_manager.bench_manager.utils._refresh",
-			doctype=doctype,
-			docname=docname,
-			commands=commands,
-		)
 
 
 def backup_sites_with_daily_option():
@@ -438,7 +372,6 @@ def dropbox_backup_sites_with_monthly_option():
         take_dropbox_backup(site_list)
 
 def create_backup(site_list):
-    from bench_manager.bench_manager.utils import run_command
     for i in site_list:
         site_doc = frappe.get_doc("Site",i.name)
         key = datetime.now() + timedelta(seconds=1)
