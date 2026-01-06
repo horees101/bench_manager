@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 import dropbox
 import frappe
+from rq.timeouts import JobTimeoutException
 from bench_manager.bench_manager.utils import (
 	run_command,
 	safe_decode,
