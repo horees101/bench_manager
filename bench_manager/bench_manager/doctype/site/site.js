@@ -1,6 +1,28 @@
 // Copyright (c) 2017, Frappé and contributors
 // For license information, please see license.txt
 
+frappe.require("/assets/bench_manager/js/bench_manager.js");
+
+const startConsoleDialog = (key) => {
+	const launch = () =>
+		typeof window.console_dialog === "function" ? window.console_dialog(key) : null;
+
+	const dialog = launch();
+	if (dialog) {
+		return dialog;
+	}
+
+	frappe.require("/assets/bench_manager/js/bench_manager.js", () => {
+		if (!launch()) {
+			frappe.msgprint(
+				__('Console output could not be started. Please reload the page and try again.')
+			);
+		}
+	});
+
+	return null;
+};
+
 frappe.ui.form.on('Site', {
 	onload: function(frm) {
 		if (frm.is_new() != 1) {
@@ -14,7 +36,7 @@ frappe.ui.form.on('Site', {
 	validate: function(frm) {
 		if (frm.doc.db_name == undefined) {
 			let key = frappe.datetime.get_datetime_as_string();
-			console_dialog(key);
+			startConsoleDialog(key);
 			frm.doc.key = key;
 		}
 	},
@@ -36,7 +58,9 @@ frappe.ui.form.on('Site', {
 			});
 			dialog.set_primary_action(__('Create'), () => {
 				let key = frappe.datetime.get_datetime_as_string();
-				console_dialog(key);
+				if (!startConsoleDialog(key)) {
+					return;
+				}
 				frm.call('create_alias', {
 					key: key,
 					alias: dialog.fields_dict.alias.value
@@ -57,7 +81,9 @@ frappe.ui.form.on('Site', {
 			});
 			dialog.set_primary_action(__('Delete'), () => {
 				let key = frappe.datetime.get_datetime_as_string();
-				console_dialog(key);
+				if (!startConsoleDialog(key)) {
+					return;
+				}
 				frm.call('console_command', {
 					key: key,
 					caller: 'delete-alias',
@@ -70,7 +96,9 @@ frappe.ui.form.on('Site', {
 		});
 		frm.add_custom_button(__('Migrate'), function() {
 			let key = frappe.datetime.get_datetime_as_string();
-			console_dialog(key);
+			if (!startConsoleDialog(key)) {
+				return;
+			}
 			frm.call('console_command', {
 				key: key,
 				caller: 'migrate',
@@ -78,7 +106,9 @@ frappe.ui.form.on('Site', {
 		});
 		frm.add_custom_button(__('Backup'), function() {
 			let key = frappe.datetime.get_datetime_as_string();
-			console_dialog(key);
+			if (!startConsoleDialog(key)) {
+				return;
+			}
 			frm.call('console_command', {
 				key: key,
 				caller: 'backup',
@@ -104,7 +134,9 @@ frappe.ui.form.on('Site', {
 					});
 					dialog.set_primary_action(__('Reinstall'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
-						console_dialog(key);
+						if (!startConsoleDialog(key)) {
+							return;
+						}
 						frm.call('console_command', {
 							key: key,
 							caller: 'reinstall',
@@ -134,7 +166,9 @@ frappe.ui.form.on('Site', {
 					});
 					dialog.set_primary_action(__('Install App'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
-						console_dialog(key);
+						if (!startConsoleDialog(key)) {
+							return;
+						}
 						frm.call('console_command', {
 							key: key,
 							caller: 'install_app',
@@ -164,7 +198,9 @@ frappe.ui.form.on('Site', {
 					});
 					dialog.set_primary_action(__('Uninstall App'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
-						console_dialog(key);
+						if (!startConsoleDialog(key)) {
+							return;
+						}
 						frm.call('console_command', {
 							key: key,
 							caller: 'uninstall_app',
@@ -216,7 +252,7 @@ frappe.ui.form.on('Site', {
 							callback: function(r){
 								if (r.message == 'console'){
 									frappe.run_serially([
-										() => console_dialog(key),
+										() => startConsoleDialog(key),
 										() => frm.call('console_command', {
 											key: key,
 											caller: 'drop_site',

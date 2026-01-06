@@ -1,6 +1,28 @@
 // Copyright (c) 2017, Frappe and contributors
 // For license information, please see license.txt
 
+frappe.require("/assets/bench_manager/js/bench_manager.js");
+
+const startConsoleDialog = (key) => {
+	const launch = () =>
+		typeof window.console_dialog === "function" ? window.console_dialog(key) : null;
+
+	const dialog = launch();
+	if (dialog) {
+		return dialog;
+	}
+
+	frappe.require("/assets/bench_manager/js/bench_manager.js", () => {
+		if (!launch()) {
+			frappe.msgprint(
+				__('Console output could not be started. Please reload the page and try again.')
+			);
+		}
+	});
+
+	return null;
+};
+
 frappe.ui.form.on('Bench Settings', {
 	onload: function(frm) {
 		if (frm.doc.__islocal != 1) frm.save();
@@ -26,7 +48,9 @@ frappe.ui.form.on('Bench Settings', {
 			});
 			dialog.set_primary_action(__("Get App"), () => {
 				let key = frappe.datetime.get_datetime_as_string();
-				console_dialog(key);
+				if (!startConsoleDialog(key)) {
+					return;
+				}
 				frm.call("console_command", {
 					key: key,
 					caller: 'get-app',
@@ -79,11 +103,9 @@ frappe.ui.form.on('Bench Settings', {
 								},
 								callback: function(r){
 									if (r.message == "console"){
-										if (typeof window.console_dialog !== "function") {
-											frappe.msgprint(__('Console output could not be started. Please reload the page and try again.'));
+										if (!startConsoleDialog(key)) {
 											return;
 										}
-										window.console_dialog(key);
 										frappe.call({
 											method: 'bench_manager.bench_manager.doctype.site.site.create_site',
 											args: {
@@ -117,7 +139,9 @@ frappe.ui.form.on('Bench Settings', {
 		});
 		frm.add_custom_button(__("Update"), function(){
 			let key = frappe.datetime.get_datetime_as_string();
-			console_dialog(key);
+			if (!startConsoleDialog(key)) {
+				return;
+			}
 			frm.call("console_command", {
 				key: key,
 				caller: "bench_update"
@@ -136,10 +160,23 @@ frappe.ui.form.on('Bench Settings', {
 		  fieldtype: 'Password'
 	  },
 		  ], (values) => {
+			let key = frappe.datetime.get_datetime_as_string();
+			if (!startConsoleDialog(key)) {
+				return;
+			}
 		  frappe.call({
 				  method: "bench_manager.bench_manager.doctype.bench_settings.bench_settings.setup_and_restart_nginx",
 				  args: {
-					  "root_password": values.password
+					  "root_password": values.password,
+					  key
+				  },
+				  callback: function(r) {
+					if (r.message && r.message.status === "queued") {
+						frappe.show_alert({
+							message: __('Queued reload and nginx restart'),
+							indicator: 'green'
+						});
+					}
 				  }
 			  });
 		  })

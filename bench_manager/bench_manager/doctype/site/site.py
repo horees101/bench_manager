@@ -289,17 +289,18 @@ def create_site(site_name, install_erpnext, mysql_password, admin_password, key,
 		commands=commands,
 		doctype="Bench Settings",
 		key=key,
-		site_name = site_name,
-		is_async = a_async
+		site_name=site_name,
+		docname="Bench Settings",
 	)
 	return {"status": "queued", "site_name": site_name, "key": key}
 
-def jop_site_creation(commands, doctype, key,site_name):
-    from bench_manager.bench_manager.utils import run_command
-    run_command(commands=commands,doctype="Bench Settings",key=key)
-    sync_sites()
-    site = frappe.get_doc("Site",site_name)
-    if site.developer_flag == 1:
-            site.update_app_list()
-    site.save()
-    frappe.db.commit()
+def jop_site_creation(commands, doctype, key, site_name, docname=None, **kwargs):
+	from bench_manager.bench_manager.utils import run_command
+
+	run_command(commands=commands, doctype=doctype, key=key, docname=docname or doctype)
+	sync_sites()
+	site = frappe.get_doc("Site", site_name)
+	if site.developer_flag == 1:
+		site.update_app_list()
+	site.save()
+	frappe.db.commit()
