@@ -16,8 +16,21 @@
 			fields: [{ fieldname: "console", fieldtype: "HTML" }],
 		});
 
+		var wrapper = $(dialog.get_field("console").wrapper);
+		var progressWrapper = $(
+			'<div class="bench-manager-progress" style="display:none; margin-bottom: 10px;">' +
+				'<div class="text-muted small" data-progress-label></div>' +
+				'<div class="progress" style="margin-top: 6px;">' +
+					'<div class="progress-bar" role="progressbar" style="width: 0%"></div>' +
+				'</div>' +
+			'</div>'
+		).appendTo(wrapper);
+
+		var progressLabel = progressWrapper.find("[data-progress-label]");
+		var progressBar = progressWrapper.find(".progress-bar");
+
 		var target = $('<pre class="console"><code></code></pre>')
-			.appendTo(dialog.get_field("console").wrapper)
+			.appendTo(wrapper)
 			.find("code")
 			.get(0);
 
@@ -33,6 +46,17 @@
 		dialog.$wrapper.find(".modal-dialog").css("width", "800px");
 
 		frappe.realtime.on(key, function (output) {
+			if (output && output.type === "progress") {
+				var percent = Math.max(0, Math.min(100, output.percent || 0));
+				var label = output.label || "";
+				progressWrapper.show();
+				progressLabel.text(label);
+				progressBar.css("width", percent + "%");
+				progressBar.attr("aria-valuenow", percent);
+				progressBar.text(percent + "%");
+				return;
+			}
+
 			if (output === "\r") {
 				state.in_progress = true;
 				update_console(state);

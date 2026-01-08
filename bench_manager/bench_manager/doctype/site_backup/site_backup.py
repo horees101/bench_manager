@@ -87,7 +87,7 @@ def restore_backup(
 	if on_a_new_site == "1":
 		site_name = new_site_name
 		commands.append(
-			"bench new-site --mariadb-root-password {mysql_password} --admin-password {admin_password} --no-mariadb-socket {site_name}".format(
+			"bench new-site --mariadb-root-password {mysql_password} --admin-password {admin_password} --mariadb-user-host-login-scope='%' {site_name}".format(
 				site_name=site_name, mysql_password=mysql_password, admin_password=admin_password
 			)
 		)

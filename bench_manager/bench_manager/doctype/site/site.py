@@ -14,6 +14,7 @@ import frappe
 import pymysql
 from bench_manager.bench_manager.utils import (
 	safe_decode,
+	normalize_site_config,
 	verify_whitelisted_call,
 )
 from frappe.model.document import Document
@@ -254,11 +255,27 @@ def pass_exists(doctype, docname=""):
 
 
 @frappe.whitelist()
-def verify_password(site_name, mysql_password):
+def verify_password(
+	site_name,
+	mysql_password=None,
+	db_host=None,
+	db_port=None,
+	db_root_user=None,
+	db_root_password=None,
+):
 	verify_whitelisted_call()
+	root_password = db_root_password or mysql_password
+	if not root_password:
+		frappe.throw("MySQL password is required")
+	root_user = db_root_user or "root"
+	host = db_host or (frappe.conf.db_host or "localhost")
+	port = int(db_port or 3306)
 	try:
 		db = pymysql.connect(
-			host=frappe.conf.db_host or "localhost", user="root", passwd=mysql_password
+			host=host,
+			user=root_user,
+			passwd=root_password,
+			port=port,
 		)
 		db.close()
 	except Exception as e:
@@ -267,13 +284,78 @@ def verify_password(site_name, mysql_password):
 	return "console"
 
 
+def _sanitize_value(value):
+	return shlex.quote(str(value))
+
+
+def _build_new_site_command(site_name, admin_password, db_settings):
+	base = [
+		"bench",
+		"new-site",
+		"--admin-password",
+		_sanitize_value(admin_password),
+		"--mariadb-user-host-login-scope='%'",
+	]
+
+	mode = db_settings.get("db_mode") or "local"
+	if mode == "local":
+		base.extend(
+			[
+				"--mariadb-root-password",
+				_sanitize_value(db_settings.get("db_root_password")),
+			]
+		)
+	else:
+		base.extend(
+			[
+				"--db-host",
+				_sanitize_value(db_settings.get("db_host")),
+				"--db-port",
+				_sanitize_value(db_settings.get("db_port")),
+				"--db-user",
+				_sanitize_value(db_settings.get("db_root_user")),
+				"--db-password",
+				_sanitize_value(db_settings.get("db_root_password")),
+			]
+		)
+
+	base.append(_sanitize_value(site_name))
+	return " ".join(base)
+
+
 @frappe.whitelist()
-def create_site(site_name, install_erpnext, mysql_password, admin_password, key, a_async=True):
+def create_site(
+	site_name,
+	install_erpnext,
+	mysql_password,
+	admin_password,
+	key,
+	a_async=True,
+	db_mode="local",
+	db_host=None,
+	db_port=None,
+	db_root_user=None,
+	db_root_password=None,
+):
 	verify_whitelisted_call()
+	if (db_mode or "local") == "local" and not (db_root_password or mysql_password):
+		frappe.throw("MariaDB root password is required")
+	if (db_mode or "local") != "local":
+		if not db_host:
+			frappe.throw("DB host is required for remote databases")
+		if not db_root_user:
+			frappe.throw("DB root user is required for remote databases")
+		if not db_root_password:
+			frappe.throw("DB root password is required for remote databases")
+	db_settings = {
+		"db_mode": db_mode or "local",
+		"db_host": db_host or "127.0.0.1",
+		"db_port": db_port or 3306,
+		"db_root_user": db_root_user or "root",
+		"db_root_password": db_root_password or mysql_password,
+	}
 	commands = [
-		"bench new-site --mariadb-root-password {mysql_password} --admin-password {admin_password} --no-mariadb-socket {site_name}".format(
-			site_name=site_name, admin_password=admin_password, mysql_password=mysql_password
-		),
+		_build_new_site_command(site_name, admin_password, db_settings),
 	]
 	if install_erpnext == "true":
 		with open("apps.txt", "r") as f:
@@ -289,17 +371,33 @@ def create_site(site_name, install_erpnext, mysql_password, admin_password, key,
 		commands=commands,
 		doctype="Bench Settings",
 		key=key,
-		site_name = site_name,
-		is_async = a_async
+		site_name=site_name,
+		docname="Bench Settings",
+		retry_context={
+			"db_host": db_settings["db_host"],
+			"db_port": db_settings["db_port"],
+			"db_user": db_settings["db_root_user"],
+			"db_password": db_settings["db_root_password"],
+			"login_scope": "%",
+			"progress_context": "new_site",
+		},
 	)
 	return {"status": "queued", "site_name": site_name, "key": key}
 
-def jop_site_creation(commands, doctype, key,site_name):
-    from bench_manager.bench_manager.utils import run_command
-    run_command(commands=commands,doctype="Bench Settings",key=key)
-    sync_sites()
-    site = frappe.get_doc("Site",site_name)
-    if site.developer_flag == 1:
-            site.update_app_list()
-    site.save()
-    frappe.db.commit()
+def jop_site_creation(commands, doctype, key, site_name, docname=None, **kwargs):
+	from bench_manager.bench_manager.utils import run_command
+
+	run_command(
+		commands=commands,
+		doctype=doctype,
+		key=key,
+		docname=docname or doctype,
+		retry_context=kwargs.get("retry_context"),
+	)
+	normalize_site_config(site_name)
+	sync_sites()
+	site = frappe.get_doc("Site", site_name)
+	if site.developer_flag == 1:
+		site.update_app_list()
+	site.save()
+	frappe.db.commit()

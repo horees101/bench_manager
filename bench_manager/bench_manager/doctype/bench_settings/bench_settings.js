@@ -1,6 +1,28 @@
 // Copyright (c) 2017, Frappe and contributors
 // For license information, please see license.txt
 
+const withConsoleDialog = (key, action) => {
+	const launch = () =>
+		typeof window.console_dialog === "function" ? window.console_dialog(key) : null;
+
+	const dialog = launch();
+	if (dialog) {
+		action(dialog);
+		return;
+	}
+
+	frappe.require("/assets/bench_manager/js/bench_manager.js", () => {
+		const loaded = launch();
+		if (loaded) {
+			action(loaded);
+			return;
+		}
+		frappe.msgprint(
+			__('Console output could not be started. Please reload the page and try again.')
+		);
+	});
+};
+
 frappe.ui.form.on('Bench Settings', {
 	onload: function(frm) {
 		if (frm.doc.__islocal != 1) frm.save();
@@ -26,13 +48,14 @@ frappe.ui.form.on('Bench Settings', {
 			});
 			dialog.set_primary_action(__("Get App"), () => {
 				let key = frappe.datetime.get_datetime_as_string();
-				console_dialog(key);
-				frm.call("console_command", {
-					key: key,
-					caller: 'get-app',
-					app_name: dialog.fields_dict.app_name.value
-				}, () => {
-					dialog.hide();
+				withConsoleDialog(key, () => {
+					frm.call("console_command", {
+						key: key,
+						caller: 'get-app',
+						app_name: dialog.fields_dict.app_name.value
+					}, () => {
+						dialog.hide();
+					});
 				});
 			});
 			dialog.show();
@@ -49,41 +72,97 @@ frappe.ui.form.on('Bench Settings', {
 						fields: [
 							{fieldname: 'site_name', fieldtype: 'Data', label: "Site Name", reqd: true},
 							{fieldname: 'install_erpnext', fieldtype: 'Check', label: "Install ERPNext"},
+							{
+								fieldname: 'db_mode',
+								fieldtype: 'Select',
+								label: 'Database Mode',
+								options: ['local', 'remote', 'clustered'],
+								default: 'local',
+								reqd: true
+							},
+							{
+								fieldname: 'db_host',
+								fieldtype: 'Data',
+								label: 'DB Host',
+								default: '127.0.0.1',
+								depends_on: 'eval:doc.db_mode != "local"'
+							},
+							{
+								fieldname: 'db_port',
+								fieldtype: 'Int',
+								label: 'DB Port',
+								default: 3306,
+								depends_on: 'eval:doc.db_mode != "local"'
+							},
+							{
+								fieldname: 'db_root_user',
+								fieldtype: 'Data',
+								label: 'DB Root User',
+								default: 'root',
+								depends_on: 'eval:doc.db_mode != "local"'
+							},
+							{
+								fieldname: 'db_root_password',
+								fieldtype: 'Password',
+								label: 'DB Root Password',
+								reqd: true,
+								depends_on: 'eval:doc.db_mode != "local"'
+							},
 							{fieldname: 'admin_password', fieldtype: 'Password',
 								label: 'Administrator Password', reqd: r['message']['condition'][0] != 'T',
 								default: (r['message']['admin_password'] ? r['message']['admin_password'] :'admin'),
 								depends_on: `eval:${String(r['message']['condition'][0] != 'T')}`},
-							{fieldname: 'mysql_password', fieldtype: 'Password',
-								label: 'MySQL Password', reqd: r['message']['condition'][1] != 'T',
-								default: r['message']['root_password'], depends_on: `eval:${String(r['message']['condition'][1] != 'T')}`}
+							{
+								fieldname: 'mysql_password',
+								fieldtype: 'Password',
+								label: 'MariaDB Root Password',
+								reqd: r['message']['condition'][1] != 'T',
+								default: r['message']['root_password'],
+								depends_on: `eval:${String(r['message']['condition'][1] != 'T')} && doc.db_mode == "local"`
+							}
 						],
-						});
-						dialog.set_primary_action(__("Create"), () => {
-							let key = frappe.datetime.get_datetime_as_string();
-							const site_name = (dialog.fields_dict.site_name.value || "").trim();
-							if (!site_name) {
-								frappe.msgprint(__('Please enter a site name.'));
+					});
+					dialog.set_primary_action(__("Create"), () => {
+						let key = frappe.datetime.get_datetime_as_string();
+						const site_name = (dialog.fields_dict.site_name.value || "").trim();
+						if (!site_name) {
+							frappe.msgprint(__('Please enter a site name.'));
+							return;
+						}
+						let install_erpnext;
+						if (dialog.fields_dict.install_erpnext.last_value != 1){
+							install_erpnext = "false";
+						} else {
+							install_erpnext = "true";
+						}
+						const dbMode = dialog.fields_dict.db_mode.value || "local";
+						if (dbMode !== "local") {
+							if (!dialog.fields_dict.db_host.value) {
+								frappe.msgprint(__('Please enter a database host.'));
 								return;
 							}
-							let install_erpnext;
-							if (dialog.fields_dict.install_erpnext.last_value != 1){
-								install_erpnext = "false";
-							} else {
-								install_erpnext = "true";
+							if (!dialog.fields_dict.db_root_user.value) {
+								frappe.msgprint(__('Please enter a database root user.'));
+								return;
+							}
+							if (!dialog.fields_dict.db_root_password.value) {
+								frappe.msgprint(__('Please enter a database root password.'));
+								return;
+							}
 						}
 						frappe.call({
 							method: 'bench_manager.bench_manager.doctype.site.site.verify_password',
-								args: {
-									site_name: site_name,
-									mysql_password: dialog.fields_dict.mysql_password.value
-								},
-								callback: function(r){
-									if (r.message == "console"){
-										if (typeof window.console_dialog !== "function") {
-											frappe.msgprint(__('Console output could not be started. Please reload the page and try again.'));
-											return;
-										}
-										window.console_dialog(key);
+							args: {
+								site_name: site_name,
+								mysql_password: dialog.fields_dict.mysql_password.value,
+								db_host: dialog.fields_dict.db_host.value,
+								db_port: dialog.fields_dict.db_port.value,
+								db_root_user: dialog.fields_dict.db_root_user.value,
+								db_root_password: dialog.fields_dict.db_root_password.value
+							},
+							callback: function(r){
+								if (r.message == "console"){
+									withConsoleDialog(key, () => {
 										frappe.call({
 											method: 'bench_manager.bench_manager.doctype.site.site.create_site',
 											args: {
@@ -91,7 +170,12 @@ frappe.ui.form.on('Bench Settings', {
 												admin_password: dialog.fields_dict.admin_password.value,
 												mysql_password: dialog.fields_dict.mysql_password.value,
 												install_erpnext: install_erpnext,
-												key: key
+												key: key,
+												db_mode: dialog.fields_dict.db_mode.value,
+												db_host: dialog.fields_dict.db_host.value,
+												db_port: dialog.fields_dict.db_port.value,
+												db_root_user: dialog.fields_dict.db_root_user.value,
+												db_root_password: dialog.fields_dict.db_root_password.value
 											},
 											freeze: true,
 											callback: function(response) {
@@ -107,9 +191,10 @@ frappe.ui.form.on('Bench Settings', {
 											}
 										});
 										dialog.hide();
-									} 
-								}
-							});
+									});
+								} 
+							}
+						});
 					});
 					dialog.show();
 				}
@@ -117,10 +202,11 @@ frappe.ui.form.on('Bench Settings', {
 		});
 		frm.add_custom_button(__("Update"), function(){
 			let key = frappe.datetime.get_datetime_as_string();
-			console_dialog(key);
-			frm.call("console_command", {
-				key: key,
-				caller: "bench_update"
+			withConsoleDialog(key, () => {
+				frm.call("console_command", {
+					key: key,
+					caller: "bench_update"
+				});
 			});
 		});
 		frm.add_custom_button(__('Sync'), () => {
@@ -136,12 +222,24 @@ frappe.ui.form.on('Bench Settings', {
 		  fieldtype: 'Password'
 	  },
 		  ], (values) => {
-		  frappe.call({
-				  method: "bench_manager.bench_manager.doctype.bench_settings.bench_settings.setup_and_restart_nginx",
-				  args: {
-					  "root_password": values.password
-				  }
-			  });
+			let key = frappe.datetime.get_datetime_as_string();
+			withConsoleDialog(key, () => {
+				frappe.call({
+					method: "bench_manager.bench_manager.doctype.bench_settings.bench_settings.setup_and_restart_nginx",
+					args: {
+						"root_password": values.password,
+						key
+					},
+					callback: function(r) {
+						if (r.message && r.message.status === "queued") {
+							frappe.show_alert({
+								message: __('Queued reload and nginx restart'),
+								indicator: 'green'
+							});
+						}
+					}
+				});
+			});
 		  })
 		});
 	},

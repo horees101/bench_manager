@@ -99,12 +99,20 @@ class BenchSettings(Document):
 	def console_command(self, key, caller, app_name=None, branch_name=None):
 		commands = {
 			"bench_update": ["bench update"],
-			"switch_branch": [""],
+			"switch_branch": (
+				["bench switch-to-branch {branch_name}".format(branch_name=branch_name)]
+				if branch_name
+				else []
+			),
 			"get-app": ["bench get-app {app_name}".format(app_name=app_name)],
 		}
+		command_list = commands.get(caller, [])
+		command_list = [command for command in command_list if command]
+		if not command_list:
+			frappe.throw(_("No valid command configured for {0}").format(caller))
 		frappe.enqueue(
 			"bench_manager.bench_manager.utils.run_command",
-			commands=commands[caller],
+			commands=command_list,
 			doctype=self.doctype,
 			key=key,
 			docname=self.name,
@@ -331,14 +339,20 @@ def _run_sync_all():
 
 
 @frappe.whitelist()
-def setup_and_restart_nginx(root_password):
-    now = datetime.now()
-    dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
-    commands = [
-		"bench setup nginx --yes"
-	]
-    commands.append(f"echo '{root_password}' | sudo -S service nginx restart")
-    run_command(commands,"Bench Settings",dt_string)
+def setup_and_restart_nginx(root_password, key=None):
+	verify_whitelisted_call()
+	now = datetime.now()
+	dt_string = key or now.strftime("%Y/%m/%d, %H:%M:%S")
+	commands = ["bench setup nginx --yes"]
+	commands.append(f"echo '{root_password}' | sudo -S service nginx restart")
+	frappe.enqueue(
+		"bench_manager.bench_manager.utils.run_command",
+		commands=commands,
+		doctype="Bench Settings",
+		key=dt_string,
+		docname="Bench Settings",
+	)
+	return {"status": "queued", "key": dt_string}
 
 
 def backup_sites_with_daily_option():
