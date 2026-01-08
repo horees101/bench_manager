@@ -62,11 +62,19 @@ def run_command(
 		"Executing Command:\n{logged_command}\n\n".format(logged_command=logged_command),
 		user=user,
 	)
+	publish_progress(key, 5, "Starting command", user)
+	command_status = "Success"
+	should_upload_backup = False
+	backup_site_name = None
 	try:
 		if doctype == "Site" and original_docname and original_docname.strip():
 			normalize_site_config(original_docname)
 		progress_context = (retry_context or {}).get("progress_context")
 		for command in commands:
+			if _is_backup_command(command):
+				should_upload_backup = True
+				backup_site_name = _get_site_name_from_command(command) or backup_site_name
+				publish_progress(key, 20, "Starting backup", user)
 			if _is_new_site_command(command):
 				console_dump = _run_new_site_with_retry(
 					command,
@@ -85,12 +93,16 @@ def run_command(
 					publish_progress(key, 100, "Finalizing & migrations", user)
 
 			console_dump = _run_single_command(command, key, user, cwd, console_dump)
+			if _is_backup_command(command):
+				publish_progress(key, 60, "Backup completed", user)
+				publish_progress(key, 90, "Syncing backups", user)
 
 		if progress_context == "new_site":
 			publish_progress(key, 100, "Finalizing & migrations", user)
 
 		_close_the_doc(start_time, key, console_dump, status="Success", user=user)
 	except Exception as e:
+		command_status = "Failed"
 		if isinstance(e, CommandFailed):
 			console_dump = e.console_dump
 		_close_the_doc(
@@ -101,6 +113,10 @@ def run_command(
 			user=user,
 		)
 	finally:
+		try:
+			publish_progress(key, 100, command_status, user)
+		except Exception:
+			pass
 		frappe.db.commit()
 		# hack: frappe.db.commit() to make sure the log created is robust,
 		# and the _refresh throws an error if the doc is deleted
@@ -110,6 +126,9 @@ def run_command(
 			docname=docname,
 			commands=commands,
 		)
+		_enqueue_backup_sync_if_needed(commands)
+		if should_upload_backup and command_status == "Success" and backup_site_name:
+			_enqueue_backup_upload(backup_site_name)
 
 
 def _close_the_doc(start_time, key, console_dump, status, user):
@@ -295,3 +314,64 @@ def safe_decode(string, encoding="utf-8"):
 	except Exception:
 		pass
 	return string
+
+
+def _is_backup_command(command):
+	return " backup" in command and command.strip().startswith("bench ")
+
+
+def _get_site_name_from_command(command):
+	match = re.search(r"--site\s+([^\s]+)", command)
+	if match:
+		return match.group(1)
+	return None
+
+
+def _should_sync_backups(commands):
+	triggers = [
+		" backup",
+		" new-site",
+		" drop-site",
+		" migrate",
+		" install-app",
+		" uninstall-app",
+		" reinstall",
+	]
+	return any(any(trigger in command for trigger in triggers) for command in commands)
+
+
+def _enqueue_backup_sync_if_needed(commands):
+	if not _should_sync_backups(commands):
+		return
+	try:
+		min_interval_seconds = 60
+		if frappe.db.has_column("Bench Settings", "auto_sync_min_interval_seconds"):
+			min_interval_seconds = (
+				frappe.db.get_value(
+					"Bench Settings", None, "auto_sync_min_interval_seconds"
+				)
+				or 60
+			)
+		frappe.enqueue(
+			"bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_backups_if_stale",
+			min_interval_seconds=min_interval_seconds,
+		)
+	except Exception:
+		frappe.log_error(
+			title="Bench Manager Auto Sync",
+			message="Failed to enqueue backup sync",
+		)
+
+
+def _enqueue_backup_upload(site_name):
+	try:
+		frappe.enqueue(
+			"bench_manager.bench_manager.doctype.bench_settings.bench_settings.upload_latest_backup_set",
+			site_name=site_name,
+			queue="long",
+		)
+	except Exception:
+		frappe.log_error(
+			title="Bench Manager Backup Upload",
+			message="Failed to enqueue backup upload for {0}".format(site_name),
+		)

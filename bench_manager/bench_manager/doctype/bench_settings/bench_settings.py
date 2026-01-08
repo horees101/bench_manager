@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 import dropbox
 import frappe
 from rq.timeouts import JobTimeoutException
+from bench_manager.bench_manager.storage_adapters import LocalAdapter, RcloneAdapter
 from bench_manager.bench_manager.utils import (
 	run_command,
 	safe_decode,
@@ -35,6 +36,15 @@ from frappe.utils import (
 from frappe.utils.background_jobs import enqueue
 
 ignore_list = [".DS_Store"]
+BACKUP_FILE_SUFFIXES = (
+	"-database.sql",
+	"-database.sql.gz",
+	"-site_config_backup.json",
+	"-private-files.tar",
+	"-files.tar",
+	"_private_files.tar",
+	"_files.tar",
+)
 
 class BenchSettings(Document):
 	site_config_fields = [
@@ -194,6 +204,39 @@ def update_site_list():
 	return site_list
 
 
+def get_bench_setting_value(fieldname, default=None):
+	if not frappe.db.has_column("Bench Settings", fieldname):
+		return default
+	return frappe.db.get_value("Bench Settings", None, fieldname)
+
+
+def get_backup_storage_settings():
+	return {
+		"storage_provider": get_bench_setting_value("storage_provider", "Local") or "Local",
+		"rclone_remote_name": get_bench_setting_value("rclone_remote_name", ""),
+		"rclone_remote_path_prefix": get_bench_setting_value("rclone_remote_path_prefix", ""),
+		"retention_keep_last": cint(get_bench_setting_value("retention_keep_last", 0) or 0),
+		"retention_keep_days": cint(get_bench_setting_value("retention_keep_days", 0) or 0),
+		"enable_auto_sync_backups": cint(
+			get_bench_setting_value("enable_auto_sync_backups", 0) or 0
+		),
+		"auto_sync_min_interval_seconds": cint(
+			get_bench_setting_value("auto_sync_min_interval_seconds", 60) or 60
+		),
+	}
+
+
+def get_storage_adapter(settings=None):
+	settings = settings or get_backup_storage_settings()
+	provider = (settings.get("storage_provider") or "Local").strip()
+	if provider == "Rclone":
+		return RcloneAdapter(
+			settings.get("rclone_remote_name"),
+			settings.get("rclone_remote_path_prefix"),
+		)
+	return LocalAdapter()
+
+
 @frappe.whitelist()
 def sync_backups():
 	verify_whitelisted_call()
@@ -264,6 +307,159 @@ def sync_backups():
 		frappe.db.commit()
 		doc.delete()
 		frappe.db.commit()
+
+	apply_backup_retention(backup_dirs_data)
+
+
+@frappe.whitelist()
+def sync_backups_if_stale(min_interval_seconds=60):
+	verify_whitelisted_call()
+	settings = get_backup_storage_settings()
+	if not settings.get("enable_auto_sync_backups"):
+		return {"status": "skipped"}
+	min_interval_seconds = cint(
+		min_interval_seconds or settings.get("auto_sync_min_interval_seconds") or 60
+	)
+	cache = frappe.cache()
+	key = "bench_manager:sync_backups_last_ts"
+	now = frappe.utils.time.time()
+	last_ts = cache.get_value(key) or 0
+	if now - float(last_ts) < min_interval_seconds:
+		return {"status": "skipped"}
+	cache.set_value(key, now, expires_in_sec=min_interval_seconds)
+	frappe.enqueue("bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_backups")
+	return {"status": "queued"}
+
+
+def apply_backup_retention(backup_dirs_data=None):
+	settings = get_backup_storage_settings()
+	retention_keep_last = cint(settings.get("retention_keep_last") or 0)
+	retention_keep_days = cint(settings.get("retention_keep_days") or 0)
+	if retention_keep_last <= 0 and retention_keep_days <= 0:
+		return
+
+	backup_dirs_data = backup_dirs_data or update_backup_list()
+	now = datetime.now()
+	adapter = get_storage_adapter(settings)
+	backup_sets = _group_backup_sets(backup_dirs_data)
+
+	for site_name, backups in backup_sets.items():
+		backups_sorted = sorted(backups, key=lambda x: x["timestamp"], reverse=True)
+		keep_prefixes = set()
+
+		if retention_keep_last > 0:
+			keep_prefixes.update(
+				backup["prefix"] for backup in backups_sorted[:retention_keep_last]
+			)
+
+		if retention_keep_days > 0:
+			cutoff = now - timedelta(days=retention_keep_days)
+			keep_prefixes.update(
+				backup["prefix"] for backup in backups_sorted if backup["timestamp"] >= cutoff
+			)
+
+		for backup in backups_sorted:
+			if backup["prefix"] in keep_prefixes:
+				continue
+			_delete_local_backup_set(backup)
+			_delete_backup_doc(backup)
+			try:
+				adapter.delete_backup_set(site_name, backup["prefix"])
+			except Exception:
+				frappe.log_error(
+					title="Bench Manager Backup Retention",
+					message="Failed to delete remote backup set for {0} {1}".format(
+						site_name, backup["prefix"]
+					),
+				)
+
+
+def upload_latest_backup_set(site_name):
+	settings = get_backup_storage_settings()
+	adapter = get_storage_adapter(settings)
+	if isinstance(adapter, LocalAdapter):
+		return
+
+	backup_dirs_data = update_backup_list()
+	backup_sets = _group_backup_sets(backup_dirs_data).get(site_name, [])
+	if not backup_sets:
+		return
+
+	latest_backup = max(backup_sets, key=lambda x: x["timestamp"])
+	file_paths = _list_backup_files(latest_backup)
+	if not file_paths:
+		return
+
+	adapter.upload_backup_set(site_name, file_paths)
+
+
+def _group_backup_sets(backup_dirs_data):
+	backup_sets = {}
+	for entry in backup_dirs_data:
+		backup_sets.setdefault(entry["site_name"], []).append(
+			{
+				"prefix": os.path.basename(entry["file_path"]),
+				"backup_dir": os.path.dirname(entry["file_path"]),
+				"site_name": entry["site_name"],
+				"stored_location": entry["stored_location"],
+				"date": entry["date"],
+				"time": entry["time"],
+				"timestamp": _get_backup_timestamp(entry),
+			}
+		)
+	return backup_sets
+
+
+def _get_backup_timestamp(entry):
+	try:
+		return datetime.strptime(
+			"{0} {1}".format(entry["date"], entry["time"]), "%Y-%m-%d %H:%M:%S"
+		)
+	except Exception:
+		return datetime.min
+
+
+def _list_backup_files(backup_entry):
+	backup_dir = os.path.join(frappe.utils.get_bench_path(), backup_entry["backup_dir"])
+	prefix = backup_entry["prefix"]
+	if not os.path.isdir(backup_dir):
+		return []
+
+	files = []
+	for filename in os.listdir(backup_dir):
+		if not filename.startswith(prefix):
+			continue
+		if any(filename.endswith(suffix) for suffix in BACKUP_FILE_SUFFIXES):
+			files.append(os.path.join(backup_dir, filename))
+	return files
+
+
+def _delete_local_backup_set(backup_entry):
+	for file_path in _list_backup_files(backup_entry):
+		try:
+			os.remove(file_path)
+		except OSError:
+			frappe.log_error(
+				title="Bench Manager Backup Retention",
+				message="Failed to delete backup file {0}".format(file_path),
+			)
+
+
+def _delete_backup_doc(backup_entry):
+	docname = "{0} {1} {2} {3}".format(
+		backup_entry["date"],
+		backup_entry["time"],
+		backup_entry["site_name"],
+		backup_entry["stored_location"],
+	)
+	if frappe.db.exists("Site Backup", docname):
+		doc = frappe.get_doc("Site Backup", docname)
+		doc.developer_flag = 1
+		doc.save()
+		frappe.db.commit()
+		doc.delete()
+		frappe.db.commit()
+
 
 def update_backup_list():
 	response = []
