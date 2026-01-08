@@ -39,7 +39,8 @@
   "backup_storage_settings",
   "backup_storage",
   "backup_retention_days",
-  "backup_retention_count",
+  "backup_retention_count_per_site",
+  "delete_backup_files_on_retention",
   "github_settings",
   "github_username",
   "shallow_clone",
@@ -344,9 +345,15 @@
   },
   {
    "default": "20",
-   "fieldname": "backup_retention_count",
+   "fieldname": "backup_retention_count_per_site",
    "fieldtype": "Int",
-   "label": "Backup Retention Count"
+   "label": "Backup Retention Count Per Site"
+  },
+  {
+   "default": "0",
+   "fieldname": "delete_backup_files_on_retention",
+   "fieldtype": "Check",
+   "label": "Delete Backup Files On Retention"
   },
   {
    "fieldname": "send_notifications_to",

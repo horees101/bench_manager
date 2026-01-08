@@ -1,7 +1,7 @@
 // Copyright (c) 2017, Frappe and contributors
 // For license information, please see license.txt
 
-const withConsoleDialog = (key, action) => {
+const startConsoleDialog = (key, action) => {
 	const launch = () =>
 		typeof window.console_dialog === "function" ? window.console_dialog(key) : null;
 
@@ -18,8 +18,10 @@ const withConsoleDialog = (key, action) => {
 			return;
 		}
 		frappe.msgprint(
-			__('Console output could not be started. Please reload the page and try again.')
+			__('Socket.IO is down; console streaming unavailable. Check Bench Health dashboard.')
 		);
+		frappe.msgprint(__('Open Bench Manager Command list to view logs.'));
+		action(null);
 	});
 };
 
@@ -35,7 +37,6 @@ const withSaveDisabled = (frm, action) => {
 
 frappe.ui.form.on('Bench Settings', {
 	onload: function(frm) {
-		if (frm.doc.__islocal != 1) frm.save();
 		let site_config_fields = ["background_workers", "shallow_clone", "admin_password",
 			"auto_email_id", "auto_update", "frappe_user", "global_help_setup",
 			"gunicorn_workers", "github_username",
@@ -62,7 +63,7 @@ frappe.ui.form.on('Bench Settings', {
 			});
 			dialog.set_primary_action(__("Get App"), () => {
 				let key = frappe.datetime.get_datetime_as_string();
-				withConsoleDialog(key, () => {
+				startConsoleDialog(key, () => {
 					withSaveDisabled(frm, () => frm.call("console_command", {
 						key: key,
 						caller: 'get-app',
@@ -176,7 +177,7 @@ frappe.ui.form.on('Bench Settings', {
 							},
 							callback: function(r){
 								if (r.message == "console"){
-									withConsoleDialog(key, () => {
+									startConsoleDialog(key, () => {
 										withSaveDisabled(frm, () => frappe.call({
 											method: 'bench_manager.bench_manager.doctype.site.site.create_site',
 											args: {
@@ -216,7 +217,7 @@ frappe.ui.form.on('Bench Settings', {
 		});
 		frm.add_custom_button(__("Update"), function(){
 			let key = frappe.datetime.get_datetime_as_string();
-			withConsoleDialog(key, () => {
+			startConsoleDialog(key, () => {
 				withSaveDisabled(frm, () => frm.call("console_command", {
 					key: key,
 					caller: "bench_update"
@@ -237,7 +238,7 @@ frappe.ui.form.on('Bench Settings', {
 	  },
 		  ], (values) => {
 			let key = frappe.datetime.get_datetime_as_string();
-			withConsoleDialog(key, () => {
+			startConsoleDialog(key, () => {
 				withSaveDisabled(frm, () => frappe.call({
 					method: "bench_manager.bench_manager.doctype.bench_settings.bench_settings.setup_and_restart_nginx",
 					args: {

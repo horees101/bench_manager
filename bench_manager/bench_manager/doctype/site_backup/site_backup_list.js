@@ -1,4 +1,5 @@
 frappe.listview_settings['Site Backup'] = {
+	order_by: 'creation desc',
 	onload(listview) {
 		const allSitesLabel = __('All Sites');
 		const siteOptions = [allSitesLabel];

@@ -8,7 +8,7 @@
   {
    "hidden": 0,
    "label": "Bench Management",
-   "links": "[\n    {\n        \"description\": \"Site Backup\",\n        \"label\": \"Site Backup\",\n        \"name\": \"Site Backup\",\n        \"type\": \"doctype\"\n    },\n    {\n        \"description\": \"Bench Manager Command\",\n        \"label\": \"Bench Manager Command\",\n        \"name\": \"Bench Manager Command\",\n        \"type\": \"doctype\"\n    },\n    {\n        \"description\": \"Bench Settings\",\n        \"label\": \"Bench Settings\",\n        \"name\": \"Bench Settings\",\n        \"type\": \"doctype\"\n    }\n]"
+   "links": "[\n    {\n        \"description\": \"Site Backup\",\n        \"label\": \"Site Backup\",\n        \"name\": \"Site Backup\",\n        \"type\": \"doctype\"\n    },\n    {\n        \"description\": \"Bench Manager Command\",\n        \"label\": \"Bench Manager Command\",\n        \"name\": \"Bench Manager Command\",\n        \"type\": \"doctype\"\n    },\n    {\n        \"description\": \"Bench Settings\",\n        \"label\": \"Bench Settings\",\n        \"name\": \"Bench Settings\",\n        \"type\": \"doctype\"\n    },\n    {\n        \"description\": \"Bench Health Dashboard\",\n        \"label\": \"Bench Health\",\n        \"name\": \"bench-health\",\n        \"type\": \"page\"\n    }\n]"
   }
  ],
  "category": "Modules",

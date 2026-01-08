@@ -1,0 +1,29 @@
+{
+ "cards": [
+  {
+   "hidden": 0,
+   "label": "Bench Health",
+   "links": "[\n    {\n        \"description\": \"Bench Health Dashboard\",\n        \"label\": \"Bench Health\",\n        \"name\": \"bench-health\",\n        \"type\": \"page\"\n    }\n]"
+  }
+ ],
+ "category": "Modules",
+ "charts": [],
+ "creation": "2024-01-01 00:00:00.000000",
+ "developer_mode_only": 0,
+ "disable_user_customization": 0,
+ "docstatus": 0,
+ "doctype": "Desk Page",
+ "extends_another_page": 0,
+ "hide_custom": 0,
+ "idx": 0,
+ "is_standard": 1,
+ "label": "Bench Health",
+ "modified": "2024-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Bench Manager",
+ "name": "Bench Health",
+ "owner": "Administrator",
+ "pin_to_bottom": 0,
+ "pin_to_top": 1,
+ "shortcuts": []
+}

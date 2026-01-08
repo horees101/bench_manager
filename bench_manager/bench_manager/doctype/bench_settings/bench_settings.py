@@ -217,19 +217,16 @@ def get_bench_setting_value(fieldname, default=None):
 def get_backup_storage_adapter():
 	storage = (get_bench_setting_value("backup_storage", "local") or "local").lower()
 	if storage == "s3":
-		bucket = frappe.conf.get("bench_manager_s3_bucket")
-		if not bucket:
+		remote = frappe.conf.get("bench_manager_s3_remote")
+		if not remote:
 			frappe.log_error(
 				title="Bench Manager Backup Storage",
-				message="S3 storage selected but bench_manager_s3_bucket is not configured.",
+				message="S3 storage selected but bench_manager_s3_remote is not configured.",
 			)
 			return LocalFSAdapter()
 		return S3Adapter(
-			bucket,
-			region=frappe.conf.get("bench_manager_s3_region"),
-			access_key=frappe.conf.get("bench_manager_s3_access_key"),
-			secret_key=frappe.conf.get("bench_manager_s3_secret_key"),
-			prefix=frappe.conf.get("bench_manager_s3_prefix"),
+			remote,
+			remote_path_prefix=frappe.conf.get("bench_manager_s3_prefix"),
 		)
 	if storage == "gdrive":
 		remote = frappe.conf.get("bench_manager_gdrive_remote")
@@ -332,8 +329,19 @@ def enqueue_sync_backups():
 
 def apply_backup_retention(backup_dirs_data=None):
 	retention_keep_days = cint(get_bench_setting_value("backup_retention_days", 0) or 0)
-	retention_keep_count = cint(get_bench_setting_value("backup_retention_count", 0) or 0)
+	retention_keep_count = cint(
+		get_bench_setting_value("backup_retention_count_per_site", 0) or 0
+	)
+	delete_files = cint(
+		get_bench_setting_value("delete_backup_files_on_retention", 0) or 0
+	)
 	if retention_keep_days <= 0 and retention_keep_count <= 0:
+		return
+	if not delete_files:
+		frappe.log_error(
+			title="Bench Manager Backup Retention",
+			message="Retention is configured but delete_backup_files_on_retention is disabled.",
+		)
 		return
 
 	backup_dirs_data = backup_dirs_data or update_backup_list()

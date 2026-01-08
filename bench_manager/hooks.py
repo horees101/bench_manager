@@ -93,6 +93,9 @@ scheduler_events = {
 		"bench_manager.bench_manager.doctype.bench_settings.bench_settings.backup_sites_with_daily_option",
 		"bench_manager.bench_manager.doctype.bench_settings.bench_settings.dropbox_backup_sites_with_daily_option"
 	],
+    "hourly": [
+		"bench_manager.bench_manager.doctype.bench_health.bench_health.run_health_checks"
+	],
     "monthly_long": [
 		"bench_manager.bench_manager.doctype.bench_settings.bench_settings.backup_sites_with_monthly_option",
 		"bench_manager.bench_manager.doctype.bench_settings.bench_settings.dropbox_backup_sites_with_monthly_option"

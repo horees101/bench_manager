@@ -1,7 +1,7 @@
 // Copyright (c) 2017, Frappé and contributors
 // For license information, please see license.txt
 
-const withConsoleDialog = (key, action) => {
+const startConsoleDialog = (key, action) => {
 	const launch = () =>
 		typeof window.console_dialog === "function" ? window.console_dialog(key) : null;
 
@@ -18,8 +18,10 @@ const withConsoleDialog = (key, action) => {
 			return;
 		}
 		frappe.msgprint(
-			__('Console output could not be started. Please reload the page and try again.')
+			__('Socket.IO is down; console streaming unavailable. Check Bench Health dashboard.')
 		);
+		frappe.msgprint(__('Open Bench Manager Command list to view logs.'));
+		action(null);
 	});
 };
 
@@ -36,14 +38,13 @@ const withSaveDisabled = (frm, action) => {
 frappe.ui.form.on('Site', {
 	onload: function(frm) {
 		if (frm.is_new() != 1) {
-			frm.save();
 			frm.call('update_app_alias');
 		}
 	},
 	validate: function(frm) {
 		if (frm.doc.db_name == undefined) {
 			let key = frappe.datetime.get_datetime_as_string();
-			withConsoleDialog(key, () => {});
+			startConsoleDialog(key, () => {});
 			frm.doc.key = key;
 		}
 	},
@@ -65,7 +66,7 @@ frappe.ui.form.on('Site', {
 			});
 			dialog.set_primary_action(__('Create'), () => {
 				let key = frappe.datetime.get_datetime_as_string();
-				withConsoleDialog(key, () => {
+				startConsoleDialog(key, () => {
 					withSaveDisabled(frm, () => frm.call('create_alias', {
 						key: key,
 						alias: dialog.fields_dict.alias.value
@@ -87,7 +88,7 @@ frappe.ui.form.on('Site', {
 			});
 			dialog.set_primary_action(__('Delete'), () => {
 				let key = frappe.datetime.get_datetime_as_string();
-				withConsoleDialog(key, () => {
+				startConsoleDialog(key, () => {
 					withSaveDisabled(frm, () => frm.call('console_command', {
 						key: key,
 						caller: 'delete-alias',
@@ -101,7 +102,7 @@ frappe.ui.form.on('Site', {
 		});
 		frm.add_custom_button(__('Migrate'), function() {
 			let key = frappe.datetime.get_datetime_as_string();
-			withConsoleDialog(key, () => {
+			startConsoleDialog(key, () => {
 				withSaveDisabled(frm, () => frm.call('console_command', {
 					key: key,
 					caller: 'migrate',
@@ -110,7 +111,7 @@ frappe.ui.form.on('Site', {
 		});
 		frm.add_custom_button(__('Backup'), function() {
 			let key = frappe.datetime.get_datetime_as_string();
-			withConsoleDialog(key, () => {
+			startConsoleDialog(key, () => {
 				withSaveDisabled(frm, () => frm.call('console_command', {
 					key: key,
 					caller: 'backup',
@@ -137,7 +138,7 @@ frappe.ui.form.on('Site', {
 					});
 					dialog.set_primary_action(__('Reinstall'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
-						withConsoleDialog(key, () => {
+						startConsoleDialog(key, () => {
 							withSaveDisabled(frm, () => frm.call('console_command', {
 								key: key,
 								caller: 'reinstall',
@@ -168,7 +169,7 @@ frappe.ui.form.on('Site', {
 					});
 					dialog.set_primary_action(__('Install App'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
-						withConsoleDialog(key, () => {
+					startConsoleDialog(key, () => {
 							withSaveDisabled(frm, () => frm.call('console_command', {
 								key: key,
 								caller: 'install_app',
@@ -199,7 +200,7 @@ frappe.ui.form.on('Site', {
 					});
 					dialog.set_primary_action(__('Uninstall App'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
-						withConsoleDialog(key, () => {
+					startConsoleDialog(key, () => {
 							withSaveDisabled(frm, () => frm.call('console_command', {
 								key: key,
 								caller: 'uninstall_app',
@@ -251,7 +252,7 @@ frappe.ui.form.on('Site', {
 						},
 							callback: function(r){
 								if (r.message == 'console'){
-									withConsoleDialog(key, () => {
+									startConsoleDialog(key, () => {
 										withSaveDisabled(frm, () => frm.call('console_command', {
 											key: key,
 											caller: 'drop_site',

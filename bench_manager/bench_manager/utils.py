@@ -26,6 +26,13 @@ def run_command(
 	commands, doctype, key, cwd="..", docname=" ", after_command=None, retry_context=None
 ):
 	verify_whitelisted_call()
+	if not commands:
+		publish_console(key, "ERROR: No commands provided for execution.")
+		frappe.log_error(
+			title="Bench Manager Command Failed",
+			message="No commands provided for execution.",
+		)
+		frappe.throw("No commands provided for execution.")
 	original_docname = docname
 	docname = docname or doctype
 	user = getattr(frappe.session, "user", None) or "Administrator"
@@ -62,6 +69,7 @@ def run_command(
 		"Executing Command:\n{logged_command}\n\n".format(logged_command=logged_command),
 		user=user,
 	)
+	publish_console(key, "START", user=user)
 	publish_progress(key, percent=5, stage="start", user=user)
 	command_status = "Success"
 	try:
@@ -99,6 +107,11 @@ def run_command(
 		_close_the_doc(start_time, key, console_dump, status="Success", user=user)
 	except Exception as e:
 		command_status = "Failed"
+		frappe.log_error(
+			title="Bench Manager Command Failed",
+			message=frappe.get_traceback(),
+		)
+		publish_console(key, "ERROR: {0}".format(e), user=user)
 		if isinstance(e, CommandFailed):
 			console_dump = e.console_dump
 		_close_the_doc(
@@ -165,6 +178,14 @@ def publish_progress(key, percent, stage, user, label=None):
 	)
 
 
+def publish_console(key, message, user=None):
+	if not key:
+		return
+	if isinstance(message, dict):
+		message = json.dumps(message, indent=2, sort_keys=True)
+	frappe.publish_realtime(key, "{0}\n".format(message), user=user)
+
+
 def normalize_site_config(site_name):
 	site_config_path = os.path.join(
 		frappe.utils.get_bench_path(), "sites", site_name, "site_config.json"
@@ -180,10 +201,10 @@ def normalize_site_config(site_name):
 		site_config["db_user"] = site_config.get("db_name")
 		updated = True
 	if not site_config.get("db_host"):
-		site_config["db_host"] = "127.0.0.1"
+		site_config["db_host"] = frappe.conf.get("db_host") or "127.0.0.1"
 		updated = True
 	if not site_config.get("db_port"):
-		site_config["db_port"] = 3306
+		site_config["db_port"] = frappe.conf.get("db_port") or 3306
 		updated = True
 
 	if updated:
