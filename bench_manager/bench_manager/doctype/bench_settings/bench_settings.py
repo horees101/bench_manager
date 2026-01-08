@@ -330,20 +330,28 @@ def sync_backups():
 @frappe.whitelist()
 def enqueue_sync_backups():
 	verify_whitelisted_call()
-	sites_path = os.path.join(frappe.utils.get_bench_path(), "sites")
-	if not os.path.isdir(sites_path):
+	try:
+		sites_path = os.path.join(frappe.utils.get_bench_path(), "sites")
+		if not os.path.isdir(sites_path):
+			frappe.log_error(
+				title="Bench Manager Backup Sync Failed",
+				message="Sites directory not found: {0}".format(sites_path),
+			)
+			frappe.throw("Sites directory not found.")
+		frappe.enqueue(
+			"bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_backups",
+			queue="long",
+			job_name="bench_manager_sync_backups",
+			timeout=1500,
+		)
+		frappe.msgprint("Backup sync queued.")
+		return {"status": "queued", "job": "bench_manager_sync_backups"}
+	except Exception as error:
 		frappe.log_error(
 			title="Bench Manager Backup Sync Failed",
-			message="Sites directory not found: {0}".format(sites_path),
+			message=frappe.get_traceback(),
 		)
-		frappe.throw("Sites directory not found.")
-	frappe.enqueue(
-		"bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_backups",
-		queue="long",
-		job_name="bench_manager_sync_backups",
-		timeout=1500,
-	)
-	return {"status": "queued", "job": "bench_manager_sync_backups"}
+		frappe.throw("Backup sync enqueue failed: {0}".format(error))
 
 
 def apply_backup_retention(backup_dirs_data=None):
