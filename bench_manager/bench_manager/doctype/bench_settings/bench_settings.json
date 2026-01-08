@@ -37,13 +37,9 @@
   "dropbox_access_key",
   "dropbox_access_secret",
   "backup_storage_settings",
-  "storage_provider",
-  "rclone_remote_name",
-  "rclone_remote_path_prefix",
-  "retention_keep_last",
-  "retention_keep_days",
-  "enable_auto_sync_backups",
-  "auto_sync_min_interval_seconds",
+  "backup_storage",
+  "backup_retention_days",
+  "backup_retention_count",
   "github_settings",
   "github_username",
   "shallow_clone",
@@ -334,45 +330,23 @@
    "label": "Backup Storage"
   },
   {
-   "default": "Local",
-   "fieldname": "storage_provider",
+   "default": "local",
+   "fieldname": "backup_storage",
    "fieldtype": "Select",
-   "label": "Storage Provider",
-   "options": "Local\nRclone"
+   "label": "Backup Storage",
+   "options": "local\ns3\ngdrive"
   },
   {
-   "depends_on": "eval:doc.storage_provider == 'Rclone'",
-   "fieldname": "rclone_remote_name",
-   "fieldtype": "Data",
-   "label": "Rclone Remote Name"
-  },
-  {
-   "depends_on": "eval:doc.storage_provider == 'Rclone'",
-   "fieldname": "rclone_remote_path_prefix",
-   "fieldtype": "Data",
-   "label": "Rclone Remote Path Prefix"
-  },
-  {
-   "fieldname": "retention_keep_last",
+   "default": "7",
+   "fieldname": "backup_retention_days",
    "fieldtype": "Int",
-   "label": "Retention Keep Last"
+   "label": "Backup Retention Days"
   },
   {
-   "fieldname": "retention_keep_days",
+   "default": "20",
+   "fieldname": "backup_retention_count",
    "fieldtype": "Int",
-   "label": "Retention Keep Days"
-  },
-  {
-   "default": "0",
-   "fieldname": "enable_auto_sync_backups",
-   "fieldtype": "Check",
-   "label": "Enable Auto Sync Backups"
-  },
-  {
-   "default": "60",
-   "fieldname": "auto_sync_min_interval_seconds",
-   "fieldtype": "Int",
-   "label": "Auto Sync Minimum Interval (Seconds)"
+   "label": "Backup Retention Count"
   },
   {
    "fieldname": "send_notifications_to",

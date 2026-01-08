@@ -23,15 +23,22 @@ const withConsoleDialog = (key, action) => {
 	});
 };
 
+const withSaveDisabled = (frm, action) => {
+	frm.disable_save();
+	const result = action();
+	if (result && result.always) {
+		result.always(() => frm.enable_save());
+	} else {
+		frm.enable_save();
+	}
+};
+
 frappe.ui.form.on('Site', {
 	onload: function(frm) {
 		if (frm.is_new() != 1) {
 			frm.save();
 			frm.call('update_app_alias');
 		}
-		frappe.realtime.on('Bench-Manager:reload-page', () => {
-			frm.reload_doc();
-		});
 	},
 	validate: function(frm) {
 		if (frm.doc.db_name == undefined) {
@@ -59,12 +66,12 @@ frappe.ui.form.on('Site', {
 			dialog.set_primary_action(__('Create'), () => {
 				let key = frappe.datetime.get_datetime_as_string();
 				withConsoleDialog(key, () => {
-					frm.call('create_alias', {
+					withSaveDisabled(frm, () => frm.call('create_alias', {
 						key: key,
 						alias: dialog.fields_dict.alias.value
 					}, () => {
 						dialog.hide();
-					});
+					}));
 				});
 			});
 			dialog.show();
@@ -81,13 +88,13 @@ frappe.ui.form.on('Site', {
 			dialog.set_primary_action(__('Delete'), () => {
 				let key = frappe.datetime.get_datetime_as_string();
 				withConsoleDialog(key, () => {
-					frm.call('console_command', {
+					withSaveDisabled(frm, () => frm.call('console_command', {
 						key: key,
 						caller: 'delete-alias',
 						alias: dialog.fields_dict.alias.value
 					}, () => {
 						dialog.hide();
-					});
+					}));
 				});
 			});
 			dialog.show();
@@ -95,19 +102,19 @@ frappe.ui.form.on('Site', {
 		frm.add_custom_button(__('Migrate'), function() {
 			let key = frappe.datetime.get_datetime_as_string();
 			withConsoleDialog(key, () => {
-				frm.call('console_command', {
+				withSaveDisabled(frm, () => frm.call('console_command', {
 					key: key,
 					caller: 'migrate',
-				});
+				}));
 			});
 		});
 		frm.add_custom_button(__('Backup'), function() {
 			let key = frappe.datetime.get_datetime_as_string();
 			withConsoleDialog(key, () => {
-				frm.call('console_command', {
+				withSaveDisabled(frm, () => frm.call('console_command', {
 					key: key,
 					caller: 'backup',
-				});
+				}));
 			});
 		});
 		frm.add_custom_button(__('Reinstall'), function(){
@@ -131,13 +138,13 @@ frappe.ui.form.on('Site', {
 					dialog.set_primary_action(__('Reinstall'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
 						withConsoleDialog(key, () => {
-							frm.call('console_command', {
+							withSaveDisabled(frm, () => frm.call('console_command', {
 								key: key,
 								caller: 'reinstall',
 								admin_password: dialog.fields_dict.admin_password.value
 							}, () => {
 								dialog.hide();
-							});
+							}));
 						});
 					});
 					dialog.show();
@@ -162,13 +169,13 @@ frappe.ui.form.on('Site', {
 					dialog.set_primary_action(__('Install App'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
 						withConsoleDialog(key, () => {
-							frm.call('console_command', {
+							withSaveDisabled(frm, () => frm.call('console_command', {
 								key: key,
 								caller: 'install_app',
 								app_name: dialog.fields_dict.installable_apps.value
 							}, () => {
 								dialog.hide();
-							});
+							}));
 						});
 					});
 					dialog.show();
@@ -193,13 +200,13 @@ frappe.ui.form.on('Site', {
 					dialog.set_primary_action(__('Uninstall App'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
 						withConsoleDialog(key, () => {
-							frm.call('console_command', {
+							withSaveDisabled(frm, () => frm.call('console_command', {
 								key: key,
 								caller: 'uninstall_app',
 								app_name: dialog.fields_dict.removable_apps.value
 							}, () => {
 								dialog.hide();
-							});
+							}));
 						});
 					});
 					dialog.show();
@@ -236,7 +243,7 @@ frappe.ui.form.on('Site', {
 					});
 					dialog.set_primary_action(__('Drop'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
-						frappe.call({
+						withSaveDisabled(frm, () => frappe.call({
 							method: 'bench_manager.bench_manager.doctype.site.site.verify_password',
 							args: {
 								site_name: frm.doc.name,
@@ -245,7 +252,7 @@ frappe.ui.form.on('Site', {
 							callback: function(r){
 								if (r.message == 'console'){
 									withConsoleDialog(key, () => {
-										frm.call('console_command', {
+										withSaveDisabled(frm, () => frm.call('console_command', {
 											key: key,
 											caller: 'drop_site',
 											mysql_password: dialog.fields_dict.mysql_password.value
@@ -254,12 +261,12 @@ frappe.ui.form.on('Site', {
 												$('a.grey-link:contains("Delete")').click(),
 												$('button.btn.btn-primary.btn-sm:contains("Yes")').click()
 											]);
-										});
+										}));
 										dialog.hide();
 									});
 								}
 							}
-						});
+						}));
 					});
 					dialog.show();
 				}

@@ -62,19 +62,15 @@ def run_command(
 		"Executing Command:\n{logged_command}\n\n".format(logged_command=logged_command),
 		user=user,
 	)
-	publish_progress(key, 5, "Starting command", user)
+	publish_progress(key, percent=5, stage="start", user=user)
 	command_status = "Success"
-	should_upload_backup = False
-	backup_site_name = None
 	try:
 		if doctype == "Site" and original_docname and original_docname.strip():
 			normalize_site_config(original_docname)
 		progress_context = (retry_context or {}).get("progress_context")
 		for command in commands:
 			if _is_backup_command(command):
-				should_upload_backup = True
-				backup_site_name = _get_site_name_from_command(command) or backup_site_name
-				publish_progress(key, 20, "Starting backup", user)
+				publish_progress(key, percent=40, stage="database", user=user)
 			if _is_new_site_command(command):
 				console_dump = _run_new_site_with_retry(
 					command,
@@ -88,17 +84,17 @@ def run_command(
 
 			if progress_context == "new_site":
 				if "install-app erpnext" in command:
-					publish_progress(key, 70, "Installing ERPNext", user)
+					publish_progress(key, percent=70, stage="install", user=user)
 				elif " migrate" in command:
-					publish_progress(key, 100, "Finalizing & migrations", user)
+					publish_progress(key, percent=100, stage="migrate", user=user)
 
 			console_dump = _run_single_command(command, key, user, cwd, console_dump)
 			if _is_backup_command(command):
-				publish_progress(key, 60, "Backup completed", user)
-				publish_progress(key, 90, "Syncing backups", user)
+				publish_progress(key, percent=70, stage="files", user=user)
+				publish_progress(key, percent=90, stage="sync", user=user)
 
 		if progress_context == "new_site":
-			publish_progress(key, 100, "Finalizing & migrations", user)
+			publish_progress(key, percent=100, stage="migrate", user=user)
 
 		_close_the_doc(start_time, key, console_dump, status="Success", user=user)
 	except Exception as e:
@@ -114,7 +110,12 @@ def run_command(
 		)
 	finally:
 		try:
-			publish_progress(key, 100, command_status, user)
+			publish_progress(
+				key,
+				percent=100,
+				stage="complete" if command_status == "Success" else "failed",
+				user=user,
+			)
 		except Exception:
 			pass
 		frappe.db.commit()
@@ -126,9 +127,8 @@ def run_command(
 			docname=docname,
 			commands=commands,
 		)
-		_enqueue_backup_sync_if_needed(commands)
-		if should_upload_backup and command_status == "Success" and backup_site_name:
-			_enqueue_backup_upload(backup_site_name)
+		if command_status == "Success":
+			_enqueue_backup_sync_if_needed(commands)
 
 
 def _close_the_doc(start_time, key, console_dump, status, user):
@@ -157,10 +157,10 @@ def _refresh(doctype, docname, commands):
 	frappe.get_doc(doctype, docname).run_method("after_command", commands=commands)
 
 
-def publish_progress(key, percent, label, user):
+def publish_progress(key, percent, stage, user, label=None):
 	frappe.publish_realtime(
 		key,
-		{"type": "progress", "percent": percent, "label": label},
+		{"type": "progress", "percent": percent, "stage": stage, "label": label},
 		user=user,
 	)
 
@@ -209,8 +209,8 @@ def _run_new_site_with_retry(command, key, user, cwd, console_dump, retry_contex
 	retry_context = retry_context or {}
 	max_attempts = 3
 	for attempt in range(1, max_attempts + 1):
-		publish_progress(key, 10, "Validating DB connection", user)
-		publish_progress(key, 30, "Creating site database", user)
+		publish_progress(key, percent=10, stage="db-connect", user=user)
+		publish_progress(key, percent=30, stage="db-create", user=user)
 		try:
 			console_dump = _run_single_command(command, key, user, cwd, console_dump)
 		except Exception as error:
@@ -237,7 +237,7 @@ def _run_new_site_with_retry(command, key, user, cwd, console_dump, retry_contex
 				)
 			raise
 
-		publish_progress(key, 50, "Installing Frappe", user)
+		publish_progress(key, percent=50, stage="install", user=user)
 		return console_dump
 	return console_dump
 
@@ -320,22 +320,11 @@ def _is_backup_command(command):
 	return " backup" in command and command.strip().startswith("bench ")
 
 
-def _get_site_name_from_command(command):
-	match = re.search(r"--site\s+([^\s]+)", command)
-	if match:
-		return match.group(1)
-	return None
-
-
 def _should_sync_backups(commands):
 	triggers = [
 		" backup",
-		" new-site",
+		" restore",
 		" drop-site",
-		" migrate",
-		" install-app",
-		" uninstall-app",
-		" reinstall",
 	]
 	return any(any(trigger in command for trigger in triggers) for command in commands)
 
@@ -344,34 +333,14 @@ def _enqueue_backup_sync_if_needed(commands):
 	if not _should_sync_backups(commands):
 		return
 	try:
-		min_interval_seconds = 60
-		if frappe.db.has_column("Bench Settings", "auto_sync_min_interval_seconds"):
-			min_interval_seconds = (
-				frappe.db.get_value(
-					"Bench Settings", None, "auto_sync_min_interval_seconds"
-				)
-				or 60
-			)
 		frappe.enqueue(
-			"bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_backups_if_stale",
-			min_interval_seconds=min_interval_seconds,
+			"bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_backups",
+			queue="short",
 		)
+		if any(_is_backup_command(command) for command in commands):
+			frappe.publish_realtime("Bench-Manager:refresh-backups")
 	except Exception:
 		frappe.log_error(
 			title="Bench Manager Auto Sync",
 			message="Failed to enqueue backup sync",
-		)
-
-
-def _enqueue_backup_upload(site_name):
-	try:
-		frappe.enqueue(
-			"bench_manager.bench_manager.doctype.bench_settings.bench_settings.upload_latest_backup_set",
-			site_name=site_name,
-			queue="long",
-		)
-	except Exception:
-		frappe.log_error(
-			title="Bench Manager Backup Upload",
-			message="Failed to enqueue backup upload for {0}".format(site_name),
 		)

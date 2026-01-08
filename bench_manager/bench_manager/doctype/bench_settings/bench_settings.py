@@ -13,7 +13,11 @@ from urllib.parse import parse_qs, urlparse
 import dropbox
 import frappe
 from rq.timeouts import JobTimeoutException
-from bench_manager.bench_manager.storage_adapters import LocalAdapter, RcloneAdapter
+from bench_manager.bench_manager.storage_adapters import (
+	GDriveAdapter,
+	LocalFSAdapter,
+	S3Adapter,
+)
 from bench_manager.bench_manager.utils import (
 	run_command,
 	safe_decode,
@@ -210,31 +214,36 @@ def get_bench_setting_value(fieldname, default=None):
 	return frappe.db.get_value("Bench Settings", None, fieldname)
 
 
-def get_backup_storage_settings():
-	return {
-		"storage_provider": get_bench_setting_value("storage_provider", "Local") or "Local",
-		"rclone_remote_name": get_bench_setting_value("rclone_remote_name", ""),
-		"rclone_remote_path_prefix": get_bench_setting_value("rclone_remote_path_prefix", ""),
-		"retention_keep_last": cint(get_bench_setting_value("retention_keep_last", 0) or 0),
-		"retention_keep_days": cint(get_bench_setting_value("retention_keep_days", 0) or 0),
-		"enable_auto_sync_backups": cint(
-			get_bench_setting_value("enable_auto_sync_backups", 0) or 0
-		),
-		"auto_sync_min_interval_seconds": cint(
-			get_bench_setting_value("auto_sync_min_interval_seconds", 60) or 60
-		),
-	}
-
-
-def get_storage_adapter(settings=None):
-	settings = settings or get_backup_storage_settings()
-	provider = (settings.get("storage_provider") or "Local").strip()
-	if provider == "Rclone":
-		return RcloneAdapter(
-			settings.get("rclone_remote_name"),
-			settings.get("rclone_remote_path_prefix"),
+def get_backup_storage_adapter():
+	storage = (get_bench_setting_value("backup_storage", "local") or "local").lower()
+	if storage == "s3":
+		bucket = frappe.conf.get("bench_manager_s3_bucket")
+		if not bucket:
+			frappe.log_error(
+				title="Bench Manager Backup Storage",
+				message="S3 storage selected but bench_manager_s3_bucket is not configured.",
+			)
+			return LocalFSAdapter()
+		return S3Adapter(
+			bucket,
+			region=frappe.conf.get("bench_manager_s3_region"),
+			access_key=frappe.conf.get("bench_manager_s3_access_key"),
+			secret_key=frappe.conf.get("bench_manager_s3_secret_key"),
+			prefix=frappe.conf.get("bench_manager_s3_prefix"),
 		)
-	return LocalAdapter()
+	if storage == "gdrive":
+		remote = frappe.conf.get("bench_manager_gdrive_remote")
+		if not remote:
+			frappe.log_error(
+				title="Bench Manager Backup Storage",
+				message="GDrive storage selected but bench_manager_gdrive_remote is not configured.",
+			)
+			return LocalFSAdapter()
+		return GDriveAdapter(
+			remote,
+			remote_path_prefix=frappe.conf.get("bench_manager_gdrive_prefix"),
+		)
+	return LocalFSAdapter()
 
 
 @frappe.whitelist()
@@ -312,44 +321,32 @@ def sync_backups():
 
 
 @frappe.whitelist()
-def sync_backups_if_stale(min_interval_seconds=60):
+def enqueue_sync_backups():
 	verify_whitelisted_call()
-	settings = get_backup_storage_settings()
-	if not settings.get("enable_auto_sync_backups"):
-		return {"status": "skipped"}
-	min_interval_seconds = cint(
-		min_interval_seconds or settings.get("auto_sync_min_interval_seconds") or 60
+	frappe.enqueue(
+		"bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_backups",
+		queue="short",
 	)
-	cache = frappe.cache()
-	key = "bench_manager:sync_backups_last_ts"
-	now = frappe.utils.time.time()
-	last_ts = cache.get_value(key) or 0
-	if now - float(last_ts) < min_interval_seconds:
-		return {"status": "skipped"}
-	cache.set_value(key, now, expires_in_sec=min_interval_seconds)
-	frappe.enqueue("bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_backups")
 	return {"status": "queued"}
 
 
 def apply_backup_retention(backup_dirs_data=None):
-	settings = get_backup_storage_settings()
-	retention_keep_last = cint(settings.get("retention_keep_last") or 0)
-	retention_keep_days = cint(settings.get("retention_keep_days") or 0)
-	if retention_keep_last <= 0 and retention_keep_days <= 0:
+	retention_keep_days = cint(get_bench_setting_value("backup_retention_days", 0) or 0)
+	retention_keep_count = cint(get_bench_setting_value("backup_retention_count", 0) or 0)
+	if retention_keep_days <= 0 and retention_keep_count <= 0:
 		return
 
 	backup_dirs_data = backup_dirs_data or update_backup_list()
 	now = datetime.now()
-	adapter = get_storage_adapter(settings)
 	backup_sets = _group_backup_sets(backup_dirs_data)
 
 	for site_name, backups in backup_sets.items():
 		backups_sorted = sorted(backups, key=lambda x: x["timestamp"], reverse=True)
 		keep_prefixes = set()
 
-		if retention_keep_last > 0:
+		if retention_keep_count > 0:
 			keep_prefixes.update(
-				backup["prefix"] for backup in backups_sorted[:retention_keep_last]
+				backup["prefix"] for backup in backups_sorted[:retention_keep_count]
 			)
 
 		if retention_keep_days > 0:
@@ -363,34 +360,6 @@ def apply_backup_retention(backup_dirs_data=None):
 				continue
 			_delete_local_backup_set(backup)
 			_delete_backup_doc(backup)
-			try:
-				adapter.delete_backup_set(site_name, backup["prefix"])
-			except Exception:
-				frappe.log_error(
-					title="Bench Manager Backup Retention",
-					message="Failed to delete remote backup set for {0} {1}".format(
-						site_name, backup["prefix"]
-					),
-				)
-
-
-def upload_latest_backup_set(site_name):
-	settings = get_backup_storage_settings()
-	adapter = get_storage_adapter(settings)
-	if isinstance(adapter, LocalAdapter):
-		return
-
-	backup_dirs_data = update_backup_list()
-	backup_sets = _group_backup_sets(backup_dirs_data).get(site_name, [])
-	if not backup_sets:
-		return
-
-	latest_backup = max(backup_sets, key=lambda x: x["timestamp"])
-	file_paths = _list_backup_files(latest_backup)
-	if not file_paths:
-		return
-
-	adapter.upload_backup_set(site_name, file_paths)
 
 
 def _group_backup_sets(backup_dirs_data):

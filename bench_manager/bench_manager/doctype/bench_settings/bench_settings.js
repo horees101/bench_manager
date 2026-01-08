@@ -23,6 +23,16 @@ const withConsoleDialog = (key, action) => {
 	});
 };
 
+const withSaveDisabled = (frm, action) => {
+	frm.disable_save();
+	const result = action();
+	if (result && result.always) {
+		result.always(() => frm.enable_save());
+	} else {
+		frm.enable_save();
+	}
+};
+
 frappe.ui.form.on('Bench Settings', {
 	onload: function(frm) {
 		if (frm.doc.__islocal != 1) frm.save();
@@ -37,6 +47,10 @@ frappe.ui.form.on('Bench Settings', {
 		site_config_fields.forEach(function(val){
 			frm.toggle_display(val, frm.doc[val] != undefined);
 		});
+		frappe.call({
+			method: 'bench_manager.bench_manager.doctype.bench_settings.bench_settings.enqueue_sync_backups',
+			freeze: false
+		});
 	},
 	refresh: function(frm) {
 		frm.add_custom_button(__("Get App"), function(){
@@ -49,13 +63,13 @@ frappe.ui.form.on('Bench Settings', {
 			dialog.set_primary_action(__("Get App"), () => {
 				let key = frappe.datetime.get_datetime_as_string();
 				withConsoleDialog(key, () => {
-					frm.call("console_command", {
+					withSaveDisabled(frm, () => frm.call("console_command", {
 						key: key,
 						caller: 'get-app',
 						app_name: dialog.fields_dict.app_name.value
 					}, () => {
 						dialog.hide();
-					});
+					}));
 				});
 			});
 			dialog.show();
@@ -163,7 +177,7 @@ frappe.ui.form.on('Bench Settings', {
 							callback: function(r){
 								if (r.message == "console"){
 									withConsoleDialog(key, () => {
-										frappe.call({
+										withSaveDisabled(frm, () => frappe.call({
 											method: 'bench_manager.bench_manager.doctype.site.site.create_site',
 											args: {
 												site_name: site_name,
@@ -189,7 +203,7 @@ frappe.ui.form.on('Bench Settings', {
 											error: function(err) {
 												frappe.msgprint(err.message || __('Unable to start site creation.'));
 											}
-										});
+										}));
 										dialog.hide();
 									});
 								} 
@@ -203,16 +217,16 @@ frappe.ui.form.on('Bench Settings', {
 		frm.add_custom_button(__("Update"), function(){
 			let key = frappe.datetime.get_datetime_as_string();
 			withConsoleDialog(key, () => {
-				frm.call("console_command", {
+				withSaveDisabled(frm, () => frm.call("console_command", {
 					key: key,
 					caller: "bench_update"
-				});
+				}));
 			});
 		});
 		frm.add_custom_button(__('Sync'), () => {
-			frappe.call({
+			withSaveDisabled(frm, () => frappe.call({
 				method: 'bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_all'
-			});
+			}));
 		});
 		frm.add_custom_button("Reload", () => {
 			frappe.prompt([
@@ -224,7 +238,7 @@ frappe.ui.form.on('Bench Settings', {
 		  ], (values) => {
 			let key = frappe.datetime.get_datetime_as_string();
 			withConsoleDialog(key, () => {
-				frappe.call({
+				withSaveDisabled(frm, () => frappe.call({
 					method: "bench_manager.bench_manager.doctype.bench_settings.bench_settings.setup_and_restart_nginx",
 					args: {
 						"root_password": values.password,
@@ -238,14 +252,14 @@ frappe.ui.form.on('Bench Settings', {
 							});
 						}
 					}
-				});
+				}));
 			});
 		  })
 		});
 	},
 	allow_dropbox_access: function(frm) {
 		if (frm.doc.app_access_key && frm.doc.app_secret_key) {
-			frappe.call({
+			withSaveDisabled(frm, () => frappe.call({
 				method: "bench_manager.bench_manager.doctype.bench_settings.bench_settings.get_dropbox_authorize_url",
 				freeze: true,
 				callback: function(r) {
@@ -253,10 +267,10 @@ frappe.ui.form.on('Bench Settings', {
 						window.open(r.message.auth_url);
 					}
 				}
-			})
+			}))
 		}
 		else if (frm.doc.__onload && frm.doc.__onload.dropbox_setup_via_site_config) {
-			frappe.call({
+			withSaveDisabled(frm, () => frappe.call({
 				method: "bench_manager.bench_manager.doctype.bench_settings.bench_settings.get_redirect_url",
 				freeze: true,
 				callback: function(r) {
@@ -264,7 +278,7 @@ frappe.ui.form.on('Bench Settings', {
 						window.open(r.message.auth_url);
 					}
 				}
-			})
+			}))
 		}
 		else {
 			frappe.msgprint(__("Please enter values for App Access Key and App Secret Key"))

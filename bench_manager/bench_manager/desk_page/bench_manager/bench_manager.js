@@ -8,7 +8,7 @@ frappe.pages["bench-manager"].on_page_load = function () {
 	frappe.bench_manager_backups_synced = true;
 	frappe.call({
 		method:
-			"bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_backups_if_stale",
+			"bench_manager.bench_manager.doctype.bench_settings.bench_settings.enqueue_sync_backups",
 		args: {},
 		freeze: false,
 	});
