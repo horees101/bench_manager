@@ -37,7 +37,7 @@ from frappe.utils import (
 	get_url,
 	get_request_site_address,
 )
-from frappe.utils.background_jobs import enqueue
+from frappe.utils.background_jobs import enqueue, get_redis_conn
 
 ignore_list = [".DS_Store"]
 BACKUP_FILE_SUFFIXES = (
@@ -247,6 +247,7 @@ def get_backup_storage_adapter():
 def sync_backups():
 	verify_whitelisted_call()
 	try:
+		cache = frappe.cache()
 		backup_dirs_data = update_backup_list()
 		if not backup_dirs_data:
 			return {"status": "empty", "message": "No backups found."}
@@ -325,12 +326,17 @@ def sync_backups():
 			message=frappe.get_traceback(),
 		)
 		frappe.throw("Backup sync failed: {0}".format(e))
+	finally:
+		cache = frappe.cache()
+		cache.delete_value("bench_manager:sync_backups_job")
 
 
 @frappe.whitelist()
 def enqueue_sync_backups():
 	verify_whitelisted_call()
 	try:
+		if is_job_running("bench_manager:sync_backups_job"):
+			return {"status": "skipped", "job": "bench_manager_sync_backups"}
 		sites_path = os.path.join(frappe.utils.get_bench_path(), "sites")
 		if not os.path.isdir(sites_path):
 			frappe.log_error(
@@ -338,9 +344,9 @@ def enqueue_sync_backups():
 				message="Sites directory not found: {0}".format(sites_path),
 			)
 			frappe.throw("Sites directory not found.")
+		frappe.cache().set_value("bench_manager:sync_backups_job", 1, expires_in_sec=1500)
 		frappe.enqueue(
 			"bench_manager.bench_manager.doctype.bench_settings.bench_settings.sync_backups",
-			queue="long",
 			job_name="bench_manager_sync_backups",
 			timeout=1500,
 		)
@@ -352,6 +358,24 @@ def enqueue_sync_backups():
 			message=frappe.get_traceback(),
 		)
 		frappe.throw("Backup sync enqueue failed: {0}".format(error))
+
+
+def is_job_running(cache_key):
+	try:
+		connection = get_redis_conn()
+		if not connection:
+			frappe.log_error(
+				title="Bench Manager Backup Sync Failed",
+				message="Redis connection unavailable for job checks.",
+			)
+			frappe.throw("Background queue unavailable.")
+		return bool(frappe.cache().get_value(cache_key))
+	except Exception:
+		frappe.log_error(
+			title="Bench Manager Backup Sync Failed",
+			message=frappe.get_traceback(),
+		)
+		frappe.throw("Unable to check background jobs.")
 
 
 def apply_backup_retention(backup_dirs_data=None):

@@ -8,6 +8,7 @@ app_icon = "fa fa-gamepad"
 app_color = "grey"
 app_email = "info@frappe.io"
 app_license = "MIT"
+on_login = "bench_manager.bench_manager.doctype.bench_settings.bench_settings.enqueue_sync_backups"
 
 # Includes in <head>
 # ------------------
