@@ -1,26 +1,26 @@
 // Copyright (c) 2017, Frappe and contributors
 // For license information, please see license.txt
 
-frappe.require("/assets/bench_manager/js/bench_manager.js");
-
-const startConsoleDialog = (key) => {
+const withConsoleDialog = (key, action) => {
 	const launch = () =>
 		typeof window.console_dialog === "function" ? window.console_dialog(key) : null;
 
 	const dialog = launch();
 	if (dialog) {
-		return dialog;
+		action(dialog);
+		return;
 	}
 
 	frappe.require("/assets/bench_manager/js/bench_manager.js", () => {
-		if (!launch()) {
-			frappe.msgprint(
-				__('Console output could not be started. Please reload the page and try again.')
-			);
+		const loaded = launch();
+		if (loaded) {
+			action(loaded);
+			return;
 		}
+		frappe.msgprint(
+			__('Console output could not be started. Please reload the page and try again.')
+		);
 	});
-
-	return null;
 };
 
 frappe.ui.form.on('Bench Settings', {
@@ -48,15 +48,14 @@ frappe.ui.form.on('Bench Settings', {
 			});
 			dialog.set_primary_action(__("Get App"), () => {
 				let key = frappe.datetime.get_datetime_as_string();
-				if (!startConsoleDialog(key)) {
-					return;
-				}
-				frm.call("console_command", {
-					key: key,
-					caller: 'get-app',
-					app_name: dialog.fields_dict.app_name.value
-				}, () => {
-					dialog.hide();
+				withConsoleDialog(key, () => {
+					frm.call("console_command", {
+						key: key,
+						caller: 'get-app',
+						app_name: dialog.fields_dict.app_name.value
+					}, () => {
+						dialog.hide();
+					});
 				});
 			});
 			dialog.show();
@@ -103,32 +102,31 @@ frappe.ui.form.on('Bench Settings', {
 								},
 								callback: function(r){
 									if (r.message == "console"){
-										if (!startConsoleDialog(key)) {
-											return;
-										}
-										frappe.call({
-											method: 'bench_manager.bench_manager.doctype.site.site.create_site',
-											args: {
-												site_name: site_name,
-												admin_password: dialog.fields_dict.admin_password.value,
-												mysql_password: dialog.fields_dict.mysql_password.value,
-												install_erpnext: install_erpnext,
-												key: key
-											},
-											freeze: true,
-											callback: function(response) {
-												if (response.message && response.message.status) {
-													frappe.show_alert({
-														message: __('Site creation queued for {0}', [site_name]),
-														indicator: 'green'
-													});
+										withConsoleDialog(key, () => {
+											frappe.call({
+												method: 'bench_manager.bench_manager.doctype.site.site.create_site',
+												args: {
+													site_name: site_name,
+													admin_password: dialog.fields_dict.admin_password.value,
+													mysql_password: dialog.fields_dict.mysql_password.value,
+													install_erpnext: install_erpnext,
+													key: key
+												},
+												freeze: true,
+												callback: function(response) {
+													if (response.message && response.message.status) {
+														frappe.show_alert({
+															message: __('Site creation queued for {0}', [site_name]),
+															indicator: 'green'
+														});
+													}
+												},
+												error: function(err) {
+													frappe.msgprint(err.message || __('Unable to start site creation.'));
 												}
-											},
-											error: function(err) {
-												frappe.msgprint(err.message || __('Unable to start site creation.'));
-											}
+											});
+											dialog.hide();
 										});
-										dialog.hide();
 									} 
 								}
 							});
@@ -139,12 +137,11 @@ frappe.ui.form.on('Bench Settings', {
 		});
 		frm.add_custom_button(__("Update"), function(){
 			let key = frappe.datetime.get_datetime_as_string();
-			if (!startConsoleDialog(key)) {
-				return;
-			}
-			frm.call("console_command", {
-				key: key,
-				caller: "bench_update"
+			withConsoleDialog(key, () => {
+				frm.call("console_command", {
+					key: key,
+					caller: "bench_update"
+				});
 			});
 		});
 		frm.add_custom_button(__('Sync'), () => {
@@ -161,24 +158,23 @@ frappe.ui.form.on('Bench Settings', {
 	  },
 		  ], (values) => {
 			let key = frappe.datetime.get_datetime_as_string();
-			if (!startConsoleDialog(key)) {
-				return;
-			}
-		  frappe.call({
-				  method: "bench_manager.bench_manager.doctype.bench_settings.bench_settings.setup_and_restart_nginx",
-				  args: {
-					  "root_password": values.password,
-					  key
-				  },
-				  callback: function(r) {
-					if (r.message && r.message.status === "queued") {
-						frappe.show_alert({
-							message: __('Queued reload and nginx restart'),
-							indicator: 'green'
-						});
+			withConsoleDialog(key, () => {
+				frappe.call({
+					method: "bench_manager.bench_manager.doctype.bench_settings.bench_settings.setup_and_restart_nginx",
+					args: {
+						"root_password": values.password,
+						key
+					},
+					callback: function(r) {
+						if (r.message && r.message.status === "queued") {
+							frappe.show_alert({
+								message: __('Queued reload and nginx restart'),
+								indicator: 'green'
+							});
+						}
 					}
-				  }
-			  });
+				});
+			});
 		  })
 		});
 	},

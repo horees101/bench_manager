@@ -1,26 +1,26 @@
 // Copyright (c) 2017, Frappé and contributors
 // For license information, please see license.txt
 
-frappe.require("/assets/bench_manager/js/bench_manager.js");
-
-const startConsoleDialog = (key) => {
+const withConsoleDialog = (key, action) => {
 	const launch = () =>
 		typeof window.console_dialog === "function" ? window.console_dialog(key) : null;
 
 	const dialog = launch();
 	if (dialog) {
-		return dialog;
+		action(dialog);
+		return;
 	}
 
 	frappe.require("/assets/bench_manager/js/bench_manager.js", () => {
-		if (!launch()) {
-			frappe.msgprint(
-				__('Console output could not be started. Please reload the page and try again.')
-			);
+		const loaded = launch();
+		if (loaded) {
+			action(loaded);
+			return;
 		}
+		frappe.msgprint(
+			__('Console output could not be started. Please reload the page and try again.')
+		);
 	});
-
-	return null;
 };
 
 frappe.ui.form.on('Site', {
@@ -36,7 +36,7 @@ frappe.ui.form.on('Site', {
 	validate: function(frm) {
 		if (frm.doc.db_name == undefined) {
 			let key = frappe.datetime.get_datetime_as_string();
-			startConsoleDialog(key);
+			withConsoleDialog(key, () => {});
 			frm.doc.key = key;
 		}
 	},
@@ -58,14 +58,13 @@ frappe.ui.form.on('Site', {
 			});
 			dialog.set_primary_action(__('Create'), () => {
 				let key = frappe.datetime.get_datetime_as_string();
-				if (!startConsoleDialog(key)) {
-					return;
-				}
-				frm.call('create_alias', {
-					key: key,
-					alias: dialog.fields_dict.alias.value
-				}, () => {
-					dialog.hide();
+				withConsoleDialog(key, () => {
+					frm.call('create_alias', {
+						key: key,
+						alias: dialog.fields_dict.alias.value
+					}, () => {
+						dialog.hide();
+					});
 				});
 			});
 			dialog.show();
@@ -81,37 +80,34 @@ frappe.ui.form.on('Site', {
 			});
 			dialog.set_primary_action(__('Delete'), () => {
 				let key = frappe.datetime.get_datetime_as_string();
-				if (!startConsoleDialog(key)) {
-					return;
-				}
-				frm.call('console_command', {
-					key: key,
-					caller: 'delete-alias',
-					alias: dialog.fields_dict.alias.value
-				}, () => {
-					dialog.hide();
+				withConsoleDialog(key, () => {
+					frm.call('console_command', {
+						key: key,
+						caller: 'delete-alias',
+						alias: dialog.fields_dict.alias.value
+					}, () => {
+						dialog.hide();
+					});
 				});
 			});
 			dialog.show();
 		});
 		frm.add_custom_button(__('Migrate'), function() {
 			let key = frappe.datetime.get_datetime_as_string();
-			if (!startConsoleDialog(key)) {
-				return;
-			}
-			frm.call('console_command', {
-				key: key,
-				caller: 'migrate',
+			withConsoleDialog(key, () => {
+				frm.call('console_command', {
+					key: key,
+					caller: 'migrate',
+				});
 			});
 		});
 		frm.add_custom_button(__('Backup'), function() {
 			let key = frappe.datetime.get_datetime_as_string();
-			if (!startConsoleDialog(key)) {
-				return;
-			}
-			frm.call('console_command', {
-				key: key,
-				caller: 'backup',
+			withConsoleDialog(key, () => {
+				frm.call('console_command', {
+					key: key,
+					caller: 'backup',
+				});
 			});
 		});
 		frm.add_custom_button(__('Reinstall'), function(){
@@ -134,15 +130,14 @@ frappe.ui.form.on('Site', {
 					});
 					dialog.set_primary_action(__('Reinstall'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
-						if (!startConsoleDialog(key)) {
-							return;
-						}
-						frm.call('console_command', {
-							key: key,
-							caller: 'reinstall',
-							admin_password: dialog.fields_dict.admin_password.value
-						}, () => {
-							dialog.hide();
+						withConsoleDialog(key, () => {
+							frm.call('console_command', {
+								key: key,
+								caller: 'reinstall',
+								admin_password: dialog.fields_dict.admin_password.value
+							}, () => {
+								dialog.hide();
+							});
 						});
 					});
 					dialog.show();
@@ -166,15 +161,14 @@ frappe.ui.form.on('Site', {
 					});
 					dialog.set_primary_action(__('Install App'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
-						if (!startConsoleDialog(key)) {
-							return;
-						}
-						frm.call('console_command', {
-							key: key,
-							caller: 'install_app',
-							app_name: dialog.fields_dict.installable_apps.value
-						}, () => {
-							dialog.hide();
+						withConsoleDialog(key, () => {
+							frm.call('console_command', {
+								key: key,
+								caller: 'install_app',
+								app_name: dialog.fields_dict.installable_apps.value
+							}, () => {
+								dialog.hide();
+							});
 						});
 					});
 					dialog.show();
@@ -198,15 +192,14 @@ frappe.ui.form.on('Site', {
 					});
 					dialog.set_primary_action(__('Uninstall App'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
-						if (!startConsoleDialog(key)) {
-							return;
-						}
-						frm.call('console_command', {
-							key: key,
-							caller: 'uninstall_app',
-							app_name: dialog.fields_dict.removable_apps.value
-						}, () => {
-							dialog.hide();
+						withConsoleDialog(key, () => {
+							frm.call('console_command', {
+								key: key,
+								caller: 'uninstall_app',
+								app_name: dialog.fields_dict.removable_apps.value
+							}, () => {
+								dialog.hide();
+							});
 						});
 					});
 					dialog.show();
@@ -248,12 +241,11 @@ frappe.ui.form.on('Site', {
 							args: {
 								site_name: frm.doc.name,
 								mysql_password: dialog.fields_dict.mysql_password.value
-							},
+						},
 							callback: function(r){
 								if (r.message == 'console'){
-									frappe.run_serially([
-										() => startConsoleDialog(key),
-										() => frm.call('console_command', {
+									withConsoleDialog(key, () => {
+										frm.call('console_command', {
 											key: key,
 											caller: 'drop_site',
 											mysql_password: dialog.fields_dict.mysql_password.value
@@ -262,11 +254,9 @@ frappe.ui.form.on('Site', {
 												$('a.grey-link:contains("Delete")').click(),
 												$('button.btn.btn-primary.btn-sm:contains("Yes")').click()
 											]);
-										}),
-										() => dialog.hide()
-									]);
-
-
+										});
+										dialog.hide();
+									});
 								}
 							}
 						});
