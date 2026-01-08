@@ -12,6 +12,8 @@ from frappe.model.document import Document
 
 def run_command(commands, doctype, key, cwd="..", docname=" ", after_command=None):
 	verify_whitelisted_call()
+	docname = docname or doctype
+	user = getattr(frappe.session, "user", None) or "Administrator"
 	start_time = frappe.utils.time.time()
 	console_dump = ""
 	logged_command = " && ".join(commands)
@@ -38,7 +40,7 @@ def run_command(commands, doctype, key, cwd="..", docname=" ", after_command=Non
 	frappe.publish_realtime(
 		key,
 		"Executing Command:\n{logged_command}\n\n".format(logged_command=logged_command),
-		user=frappe.session.user,
+		user=user,
 	)
 	try:
 		for command in commands:
@@ -46,15 +48,15 @@ def run_command(commands, doctype, key, cwd="..", docname=" ", after_command=Non
 				shlex.split(command), stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=cwd
 			)
 			for c in iter(lambda: safe_decode(terminal.stdout.read(1)), ""):
-				frappe.publish_realtime(key, c, user=frappe.session.user)
+				frappe.publish_realtime(key, c, user=user)
 				console_dump += str(c)
 		if terminal.wait():
 			_close_the_doc(
-				start_time, key, console_dump, status="Failed", user=frappe.session.user
+				start_time, key, console_dump, status="Failed", user=user
 			)
 		else:
 			_close_the_doc(
-				start_time, key, console_dump, status="Success", user=frappe.session.user
+				start_time, key, console_dump, status="Success", user=user
 			)
 	except Exception as e:
 		_close_the_doc(
