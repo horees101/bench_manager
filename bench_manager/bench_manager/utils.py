@@ -9,7 +9,7 @@ import random
 import re
 import shlex
 import time
-from subprocess import PIPE, STDOUT, Popen
+from subprocess import PIPE, STDOUT, Popen, CalledProcessError, run
 import frappe
 import pymysql
 from frappe.model.document import Document
@@ -66,7 +66,12 @@ def run_command(
 	frappe.db.commit()
 	frappe.publish_realtime(
 		key,
-		"Executing Command:\n{logged_command}\n\n".format(logged_command=logged_command),
+		"",
+		user=user,
+	)
+	publish_console(
+		key,
+		"Executing Command:\n{logged_command}".format(logged_command=logged_command),
 		user=user,
 	)
 	publish_console(key, "START", user=user)
@@ -77,6 +82,8 @@ def run_command(
 			normalize_site_config(original_docname)
 		progress_context = (retry_context or {}).get("progress_context")
 		for command in commands:
+			if _is_reinstall_command(command) or _is_new_site_command(command):
+				preflight_site_operation(_get_site_name_from_command(command), key, command)
 			if _is_backup_command(command):
 				publish_progress(key, percent=40, stage="database", user=user)
 			if _is_new_site_command(command):
@@ -96,7 +103,9 @@ def run_command(
 				elif " migrate" in command:
 					publish_progress(key, percent=100, stage="migrate", user=user)
 
-			console_dump = _run_single_command(command, key, user, cwd, console_dump)
+			console_dump = _run_command_with_lock_retry(
+				command, key, user, cwd, console_dump
+			)
 			if _is_backup_command(command):
 				publish_progress(key, percent=70, stage="files", user=user)
 				publish_progress(key, percent=90, stage="sync", user=user)
@@ -161,7 +170,12 @@ def _close_the_doc(start_time, key, console_dump, status, user):
 
 	frappe.publish_realtime(
 		key,
-		"\n\n" + status + "!\nThe operation took " + str(time_taken) + " seconds",
+		"",
+		user=user,
+	)
+	publish_console(
+		key,
+		"{0}!\nThe operation took {1} seconds".format(status, time_taken),
 		user=user,
 	)
 
@@ -181,8 +195,9 @@ def publish_progress(key, percent, stage, user, label=None):
 def publish_console(key, message, user=None):
 	if not key:
 		return
-	if isinstance(message, dict):
-		message = json.dumps(message, indent=2, sort_keys=True)
+	if isinstance(message, (dict, list)):
+		message = json.dumps(message, ensure_ascii=False)
+	message = str(message)
 	frappe.publish_realtime(key, "{0}\n".format(message), user=user)
 
 
@@ -341,6 +356,19 @@ def _is_backup_command(command):
 	return " backup" in command and command.strip().startswith("bench ")
 
 
+def _is_reinstall_command(command):
+	return " reinstall" in command and command.strip().startswith("bench --site ")
+
+
+def _get_site_name_from_command(command):
+	match = re.search(r"--site\s+([^\s]+)", command)
+	if match:
+		return match.group(1)
+	if _is_new_site_command(command):
+		return command.strip().split(" ")[-1]
+	return None
+
+
 def _should_sync_backups(commands):
 	triggers = [
 		" backup",
@@ -365,3 +393,118 @@ def _enqueue_backup_sync_if_needed(commands):
 			title="Bench Manager Auto Sync",
 			message="Failed to enqueue backup sync",
 		)
+
+
+def _run_command_with_lock_retry(command, key, user, cwd, console_dump):
+	site_name = _get_site_name_from_command(command)
+	if not site_name or not (_is_reinstall_command(command) or _is_new_site_command(command)):
+		return _run_single_command(command, key, user, cwd, console_dump)
+
+	max_attempts = 3
+	for attempt in range(1, max_attempts + 1):
+		try:
+			return _run_single_command(command, key, user, cwd, console_dump)
+		except Exception as error:
+			error_text = "{0}".format(error)
+			if isinstance(error, CommandFailed):
+				console_dump = error.console_dump
+				error_text = "{0}\n{1}".format(error_text, console_dump)
+			if _is_lock_timeout(error_text) and attempt < max_attempts:
+				publish_console(
+					key,
+					"LockTimeoutError: will retry in 5s (attempt {0}/{1})".format(
+						attempt, max_attempts
+					),
+					user=user,
+				)
+				time.sleep(5)
+				continue
+			if _is_lock_timeout(error_text):
+				lock_path = get_lock_path(site_name)
+				publish_console(
+					key,
+					"LockTimeoutError: lock at {0}. Check running bench processes.".format(
+						lock_path
+					),
+					user=user,
+				)
+			raise
+	return console_dump
+
+
+def _is_lock_timeout(error_text):
+	return "Failed to acquire lock: bench_new_site" in error_text or (
+		"Failed to aquire lock: bench_new_site" in error_text
+	)
+
+
+def get_lock_path(site_name, lock_name="bench_new_site"):
+	return os.path.join(
+		frappe.utils.get_bench_path(), "sites", site_name, "locks", "{0}.lock".format(lock_name)
+	)
+
+
+def is_lock_stale(lock_path, stale_seconds=600):
+	if not os.path.exists(lock_path):
+		return False
+	mtime = os.path.getmtime(lock_path)
+	return (time.time() - mtime) > stale_seconds
+
+
+def safe_remove_lock(lock_path):
+	if not is_lock_stale(lock_path):
+		return False
+	try:
+		os.remove(lock_path)
+		frappe.log_error(
+			title="Bench Manager Lock Cleanup",
+			message="Removed stale lock: {0}".format(lock_path),
+		)
+		return True
+	except OSError:
+		frappe.log_error(
+			title="Bench Manager Lock Cleanup Failed",
+			message="Failed to remove lock: {0}".format(lock_path),
+		)
+		return False
+
+
+def bench_process_holds_site_lock(site_name):
+	try:
+		result = run(["ps", "aux"], check=True, stdout=PIPE, stderr=PIPE, text=True)
+	except CalledProcessError:
+		return False
+	processes = result.stdout
+	if "bench new-site {0}".format(site_name) in processes:
+		return True
+	if "bench --site {0} reinstall".format(site_name) in processes:
+		return True
+	return False
+
+
+def preflight_site_operation(site_name, key, operation_name):
+	if not site_name:
+		return
+	lock_path = get_lock_path(site_name)
+	lock_dir = os.path.dirname(lock_path)
+	if not os.path.isdir(lock_dir):
+		os.makedirs(lock_dir, exist_ok=True)
+
+	if os.path.exists(lock_path):
+		if bench_process_holds_site_lock(site_name):
+			message = "Another bench operation is running for {0}.".format(site_name)
+			publish_console(key, message)
+			frappe.log_error(
+				title="Bench Manager Lock Active",
+				message="{0} ({1})".format(message, lock_path),
+			)
+			frappe.throw(message)
+		if safe_remove_lock(lock_path):
+			publish_console(key, "Stale lock detected, removing...")
+		else:
+			publish_console(
+				key,
+				"Lock file present and could not be removed: {0}".format(lock_path),
+			)
+			frappe.throw("Lock file present and could not be removed.")
+	publish_console(key, "Lock OK for {0}".format(operation_name))
