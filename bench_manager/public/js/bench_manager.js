@@ -48,7 +48,7 @@
 		frappe.realtime.on(key, function (output) {
 			if (output && output.type === "progress") {
 				var percent = Math.max(0, Math.min(100, output.percent || 0));
-				var label = output.label || "";
+				var label = output.label || output.stage || "";
 				progressWrapper.show();
 				progressLabel.text(label);
 				progressBar.css("width", percent + "%");

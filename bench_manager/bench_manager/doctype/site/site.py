@@ -158,6 +158,9 @@ class Site(Document):
 	def console_command(
 		self, key, caller, alias=None, app_name=None, admin_password=None, mysql_password=None
 	):
+		from bench_manager.bench_manager.utils import publish_console, preflight_site_operation
+
+		user = getattr(frappe.session, "user", None) or "Administrator"
 		site_abspath = None
 		if alias:
 			site_abspath = os.path.abspath(os.path.join(self.name))
@@ -191,6 +194,30 @@ class Site(Document):
 				)
 			],
 		}
+		if caller not in commands:
+			frappe.log_error(
+				title="Bench Manager Action Error",
+				message="Unsupported caller: {0}".format(caller),
+			)
+			frappe.throw("Unsupported action: {0}".format(caller))
+		if caller == "uninstall_app" and not app_name:
+			frappe.log_error(
+				title="Bench Manager Action Error",
+				message="Missing app_name for uninstall_app.",
+			)
+			frappe.throw("App name is required for uninstall.")
+		if caller == "reinstall" and not admin_password:
+			frappe.log_error(
+				title="Bench Manager Action Error",
+				message="Missing admin_password for reinstall.",
+			)
+			frappe.throw("Admin password is required for reinstall.")
+		if caller == "reinstall":
+			preflight_site_operation(self.name, key, "reinstall")
+		publish_console(key, "Requested Action: {0}".format(caller), user=user)
+		publish_console(
+			key, "Resolved Command: {0}".format(" && ".join(commands[caller])), user=user
+		)
 		frappe.enqueue(
 			"bench_manager.bench_manager.utils.run_command",
 			commands=commands[caller],
@@ -215,8 +242,10 @@ def get_installable_apps(doctype, docname):
 @frappe.whitelist()
 def get_removable_apps(doctype, docname):
 	verify_whitelisted_call()
-	removable_apps = frappe.get_doc(doctype, docname).app_list.split("\n")
-	removable_apps.remove("frappe")
+	site = frappe.get_doc(doctype, docname)
+	if not site.app_list:
+		return []
+	removable_apps = [app for app in site.app_list.split("\n") if app and app != "frappe"]
 	return removable_apps
 
 

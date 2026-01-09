@@ -8,6 +8,7 @@ app_icon = "fa fa-gamepad"
 app_color = "grey"
 app_email = "info@frappe.io"
 app_license = "MIT"
+on_login = "bench_manager.bench_manager.doctype.bench_settings.bench_settings.enqueue_sync_backups"
 
 # Includes in <head>
 # ------------------
@@ -92,6 +93,9 @@ scheduler_events = {
     "daily_long": [
 		"bench_manager.bench_manager.doctype.bench_settings.bench_settings.backup_sites_with_daily_option",
 		"bench_manager.bench_manager.doctype.bench_settings.bench_settings.dropbox_backup_sites_with_daily_option"
+	],
+    "hourly": [
+		"bench_manager.bench_manager.doctype.bench_health.bench_health.run_health_checks"
 	],
     "monthly_long": [
 		"bench_manager.bench_manager.doctype.bench_settings.bench_settings.backup_sites_with_monthly_option",
