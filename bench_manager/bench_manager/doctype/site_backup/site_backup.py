@@ -105,10 +105,12 @@ def restore_backup(
 		)
 	command_parts.append(password_suffix)
 	commands.append(" ".join(command_parts))
+	commands.append("bench --site {0} migrate".format(site_name))
 	frappe.enqueue(
 		"bench_manager.bench_manager.utils.run_command",
 		commands=commands,
 		doctype=doctype,
 		key=key,
 		docname=docname,
+		retry_context={"progress_context": "restore"},
 	)
