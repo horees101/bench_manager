@@ -57,6 +57,13 @@ There are 5 main doctypes associated with this app.
   - Reads, greps and populates all the installed apps in the App doctype.
 - The Bench setting doctype also displays all the config parameters in the common-site-config.json which is applicable to all 
   the sites in your bench instance.
+- If you do not want to sync backups on every login, comment out the `on_login` hook in `bench_manager/hooks.py`. You can still run the sync manually using the Sync Backups button in the Bench Settings page.
+- If you see the sync message but the backup list never updates, ensure your bench workers are running. You can confirm this by running `bench worker` or checking the Bench Manager Command list to verify that "Ongoing" jobs finish.
+- The app uses Redis to prevent multiple sync jobs from running at once. If the system crashes, the sync flag may get stuck in the cache. You can clear it via the Frappe console with:
+  ```
+  frappe.cache().delete_value("bench_manager:sync_backups_job")
+  ```
+- To avoid repeated notifications when the sync runs automatically, update `enqueue_sync_backups` in `bench_manager/bench_manager/doctype/bench_settings/bench_settings.py` to be silent by removing the `frappe.msgprint` line or by only notifying users when the sync is triggered manually rather than via `on_login`.
 
 ### 2. Site
 

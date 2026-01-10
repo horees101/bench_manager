@@ -22,8 +22,39 @@ class CommandFailed(Exception):
 		self.console_dump = console_dump
 
 
+def execute_bench_command(command, command_doc, cwd="..", user=None, console_dump=""):
+	if isinstance(command, str):
+		command = shlex.split(command)
+	terminal = Popen(
+		command,
+		stdin=PIPE,
+		stdout=PIPE,
+		stderr=STDOUT,
+		cwd=cwd,
+		text=True,
+		bufsize=1,
+	)
+	for line in iter(terminal.stdout.readline, ""):
+		if line == "":
+			break
+		line = line.rstrip("\n")
+		publish_console(command_doc.name, line, user=user)
+		console_dump += line + "\n"
+
+	if terminal.wait():
+		raise CommandFailed(" ".join(command), console_dump)
+	return console_dump
+
+
 def run_command(
-	commands, doctype, key, cwd="..", docname=" ", after_command=None, retry_context=None
+	commands,
+	doctype,
+	key,
+	cwd="..",
+	docname=" ",
+	after_command=None,
+	retry_context=None,
+	user=None,
 ):
 	verify_whitelisted_call()
 	if not commands:
@@ -35,7 +66,7 @@ def run_command(
 		frappe.throw("No commands provided for execution.")
 	original_docname = docname
 	docname = docname or doctype
-	user = getattr(frappe.session, "user", None) or "Administrator"
+	user = user or getattr(frappe.session, "user", None)
 	start_time = frappe.utils.time.time()
 	console_dump = ""
 	logged_command = " && ".join(commands)
@@ -52,23 +83,19 @@ def run_command(
 		logged_command = re.sub(
 			"{password} .*? ".format(password=password), "", logged_command, flags=re.DOTALL
 		)
-	doc = frappe.get_doc(
+	command_doc = frappe.get_doc(
 		{
 			"doctype": "Bench Manager Command",
 			"key": key,
 			"source": doctype + ": " + docname,
 			"command": logged_command,
 			"console": console_dump,
-			"status": "Ongoing",
+			"status": "Pending",
 		}
 	)
-	doc.insert()
+	command_doc.insert()
 	frappe.db.commit()
-	frappe.publish_realtime(
-		key,
-		"",
-		user=user,
-	)
+	command_doc.db_set("status", "Running", update_modified=False)
 	publish_console(
 		key,
 		"Executing Command:\n{logged_command}".format(logged_command=logged_command),
@@ -86,13 +113,15 @@ def run_command(
 				preflight_site_operation(_get_site_name_from_command(command), key, command)
 			if _is_backup_command(command):
 				publish_progress(key, percent=40, stage="database", user=user)
+			if _is_restore_command(command):
+				_publish_restore_stages(key, user=user)
 			if _is_new_site_command(command):
 				console_dump = _run_new_site_with_retry(
 					command,
-					key,
-					user,
+					command_doc,
 					cwd,
 					console_dump,
+					user=user,
 					retry_context=retry_context or {},
 				)
 				continue
@@ -102,9 +131,12 @@ def run_command(
 					publish_progress(key, percent=70, stage="install", user=user)
 				elif " migrate" in command:
 					publish_progress(key, percent=100, stage="migrate", user=user)
+			if progress_context == "restore" and " migrate" in command:
+				publish_progress(key, percent=95, stage="migrate", user=user)
+				publish_console(key, "Restore stage: migrate", user=user)
 
 			console_dump = _run_command_with_lock_retry(
-				command, key, user, cwd, console_dump
+				command, command_doc, cwd, console_dump, user=user
 			)
 			if _is_backup_command(command):
 				publish_progress(key, percent=70, stage="files", user=user)
@@ -121,6 +153,7 @@ def run_command(
 			message=frappe.get_traceback(),
 		)
 		publish_console(key, "ERROR: {0}".format(e), user=user)
+		publish_console(key, frappe.get_traceback(), user=user)
 		if isinstance(e, CommandFailed):
 			console_dump = e.console_dump
 		_close_the_doc(
@@ -168,11 +201,6 @@ def _close_the_doc(start_time, key, console_dump, status, user):
 	cmd.time_taken = time_taken
 	cmd.save()
 
-	frappe.publish_realtime(
-		key,
-		"",
-		user=user,
-	)
 	publish_console(
 		key,
 		"{0}!\nThe operation took {1} seconds".format(status, time_taken),
@@ -186,8 +214,9 @@ def _refresh(doctype, docname, commands):
 
 def publish_progress(key, percent, stage, user, label=None):
 	frappe.publish_realtime(
-		key,
-		{"type": "progress", "percent": percent, "stage": stage, "label": label},
+		event="bench_manager_command",
+		message={"type": "progress", "percent": percent, "stage": stage, "label": label},
+		room=key,
 		user=user,
 	)
 
@@ -198,7 +227,12 @@ def publish_console(key, message, user=None):
 	if isinstance(message, (dict, list)):
 		message = json.dumps(message, ensure_ascii=False)
 	message = str(message)
-	frappe.publish_realtime(key, "{0}\n".format(message), user=user)
+	frappe.publish_realtime(
+		event="bench_manager_command",
+		message="{0}\n".format(message),
+		room=key,
+		user=user,
+	)
 
 
 def normalize_site_config(site_name):
@@ -228,52 +262,53 @@ def normalize_site_config(site_name):
 	return updated
 
 
-def _run_single_command(command, key, user, cwd, console_dump):
-	terminal = Popen(
-		shlex.split(command), stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=cwd
+def _run_single_command(command, command_doc, cwd, console_dump, user=None):
+	return execute_bench_command(
+		command=command,
+		command_doc=command_doc,
+		cwd=cwd,
+		user=user,
+		console_dump=console_dump,
 	)
-	for c in iter(lambda: safe_decode(terminal.stdout.read(1)), ""):
-		frappe.publish_realtime(key, c, user=user)
-		console_dump += str(c)
-
-	if terminal.wait():
-		raise CommandFailed(command, console_dump)
-	return console_dump
 
 
-def _run_new_site_with_retry(command, key, user, cwd, console_dump, retry_context=None):
+def _run_new_site_with_retry(
+	command, command_doc, cwd, console_dump, user=None, retry_context=None
+):
 	retry_context = retry_context or {}
 	max_attempts = 3
 	for attempt in range(1, max_attempts + 1):
-		publish_progress(key, percent=10, stage="db-connect", user=user)
-		publish_progress(key, percent=30, stage="db-create", user=user)
+		publish_progress(command_doc.name, percent=10, stage="db-connect", user=user)
+		publish_progress(command_doc.name, percent=30, stage="db-create", user=user)
 		try:
-			console_dump = _run_single_command(command, key, user, cwd, console_dump)
+			console_dump = _run_single_command(
+				command, command_doc, cwd, console_dump, user=user
+			)
 		except Exception as error:
 			if isinstance(error, CommandFailed):
 				console_dump = error.console_dump
 			error_text = "{}".format(error)
 			if _should_retry_mariadb(error_text, console_dump) and attempt < max_attempts:
-				frappe.publish_realtime(
-					key,
-					"\nRetrying MariaDB connection (attempt {0}/{1})\n".format(
+				publish_console(
+					command_doc.name,
+					"Retrying MariaDB connection (attempt {0}/{1})".format(
 						attempt + 1, max_attempts
 					),
 					user=user,
 				)
-				_refresh_mariadb_grants(retry_context, key, user)
+				_refresh_mariadb_grants(retry_context, command_doc.name, user)
 				command = _swap_mariadb_login_scope(command, retry_context)
 				time.sleep(random.randint(3, 5))
 				continue
 			if _should_retry_mariadb(error_text, console_dump):
-				frappe.publish_realtime(
-					key,
-					"\nMariaDB connection failed after retries.\n",
+				publish_console(
+					command_doc.name,
+					"MariaDB connection failed after retries.",
 					user=user,
 				)
 			raise
 
-		publish_progress(key, percent=50, stage="install", user=user)
+		publish_progress(command_doc.name, percent=50, stage="install", user=user)
 		return console_dump
 	return console_dump
 
@@ -293,15 +328,15 @@ def _refresh_mariadb_grants(retry_context, key, user):
 			cursor.execute("FLUSH PRIVILEGES;")
 		connection.commit()
 		connection.close()
-		frappe.publish_realtime(
+		publish_console(
 			key,
-			"\nRefreshed MariaDB privileges before retry.\n",
+			"Refreshed MariaDB privileges before retry.",
 			user=user,
 		)
 	except Exception:
-		frappe.publish_realtime(
+		publish_console(
 			key,
-			"\nUnable to refresh MariaDB privileges; retrying anyway.\n",
+			"Unable to refresh MariaDB privileges; retrying anyway.",
 			user=user,
 		)
 
@@ -356,6 +391,22 @@ def _is_backup_command(command):
 	return " backup" in command and command.strip().startswith("bench ")
 
 
+def _is_restore_command(command):
+	return " restore" in command and command.strip().startswith("bench ")
+
+
+def _publish_restore_stages(key, user):
+	stages = [
+		("validating backup", 10),
+		("extracting", 30),
+		("restoring database", 60),
+		("restoring files", 80),
+	]
+	for stage, percent in stages:
+		publish_progress(key, percent=percent, stage=stage, user=user)
+		publish_console(key, "Restore stage: {0}".format(stage), user=user)
+
+
 def _is_reinstall_command(command):
 	return " reinstall" in command and command.strip().startswith("bench --site ")
 
@@ -395,15 +446,15 @@ def _enqueue_backup_sync_if_needed(commands):
 		)
 
 
-def _run_command_with_lock_retry(command, key, user, cwd, console_dump):
+def _run_command_with_lock_retry(command, command_doc, cwd, console_dump, user=None):
 	site_name = _get_site_name_from_command(command)
 	if not site_name or not (_is_reinstall_command(command) or _is_new_site_command(command)):
-		return _run_single_command(command, key, user, cwd, console_dump)
+		return _run_single_command(command, command_doc, cwd, console_dump, user=user)
 
 	max_attempts = 3
 	for attempt in range(1, max_attempts + 1):
 		try:
-			return _run_single_command(command, key, user, cwd, console_dump)
+			return _run_single_command(command, command_doc, cwd, console_dump, user=user)
 		except Exception as error:
 			error_text = "{0}".format(error)
 			if isinstance(error, CommandFailed):
@@ -411,7 +462,7 @@ def _run_command_with_lock_retry(command, key, user, cwd, console_dump):
 				error_text = "{0}\n{1}".format(error_text, console_dump)
 			if _is_lock_timeout(error_text) and attempt < max_attempts:
 				publish_console(
-					key,
+					command_doc.name,
 					"LockTimeoutError: will retry in 5s (attempt {0}/{1})".format(
 						attempt, max_attempts
 					),
@@ -422,7 +473,7 @@ def _run_command_with_lock_retry(command, key, user, cwd, console_dump):
 			if _is_lock_timeout(error_text):
 				lock_path = get_lock_path(site_name)
 				publish_console(
-					key,
+					command_doc.name,
 					"LockTimeoutError: lock at {0}. Check running bench processes.".format(
 						lock_path
 					),

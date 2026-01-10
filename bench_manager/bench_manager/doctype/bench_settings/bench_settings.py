@@ -189,9 +189,32 @@ def sync_apps():
 
 
 def update_app_list():
+	apps = get_apps_from_apps_txt()
+	if not apps:
+		apps = get_apps_from_apps_directory()
+	return apps
+
+
+def get_apps_from_apps_txt():
 	app_list_file = "apps.txt"
+	if not os.path.isfile(app_list_file):
+		return []
 	with open(app_list_file, "r") as f:
-		apps = f.read().split("\n")
+		apps = f.read().splitlines()
+	return [app.strip() for app in apps if app.strip()]
+
+
+def get_apps_from_apps_directory():
+	apps_path = os.path.abspath(os.path.join("..", "apps"))
+	if not os.path.isdir(apps_path):
+		return []
+	apps = []
+	for name in sorted(os.listdir(apps_path)):
+		if name.startswith("."):
+			continue
+		app_path = os.path.join(apps_path, name)
+		if os.path.isdir(app_path):
+			apps.append(name)
 	return apps
 
 
@@ -567,6 +590,7 @@ def setup_and_restart_nginx(root_password, key=None):
 	verify_whitelisted_call()
 	now = datetime.now()
 	dt_string = key or now.strftime("%Y/%m/%d, %H:%M:%S")
+	user = getattr(frappe.session, "user", None)
 	commands = ["bench setup nginx --yes"]
 	commands.append(f"echo '{root_password}' | sudo -S service nginx restart")
 	frappe.enqueue(
@@ -575,6 +599,7 @@ def setup_and_restart_nginx(root_password, key=None):
 		doctype="Bench Settings",
 		key=dt_string,
 		docname="Bench Settings",
+		user=user,
 	)
 	return {"status": "queued", "key": dt_string}
 

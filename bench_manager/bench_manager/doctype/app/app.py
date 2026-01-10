@@ -80,6 +80,7 @@ class App(Document):
 				check_output(shlex.split("rm -r ../apps/{app_name}".format(app_name=self.app_name)))
 
 	def update_app_details(self):
+		self.app_title = self.app_name.replace("-", " ").replace("_", " ")
 		pkg_info_file = os.path.join(
 			"..",
 			"apps",
@@ -88,42 +89,38 @@ class App(Document):
 			"PKG-INFO",
 		)
 		if os.path.isfile(pkg_info_file):
-			app_data_path = pkg_info_file
-			with open(app_data_path, "r") as f:
-				app_data = f.readlines()
-			app_data = frappe.as_unicode("".join(app_data)).split("\n")
-			if "" in app_data:
-				app_data.remove("")
-			app_data = [x + "\n" for x in app_data]
-			for data in app_data:
-				if "Version:" in data:
-					self.version = "".join(re.findall("Version: (.*?)\\n", data))
-				elif "Summary:" in data:
-					self.app_description = "".join(re.findall("Summary: (.*?)\\n", data))
-				elif "Author:" in data:
-					self.app_publisher = "".join(re.findall("Author: (.*?)\\n", data))
-				elif "Author-email:" in data:
-					self.app_email = "".join(re.findall("Author-email: (.*?)\\n", data))
-			self.app_title = self.app_name
-			self.app_title = self.app_title.replace("-", " ")
-			self.app_title = self.app_title.replace("_", " ")
-			if os.path.isdir(os.path.join("..", "apps", self.app_name, ".git")):
-				self.current_git_branch = safe_decode(
-					check_output(
-						"git rev-parse --abbrev-ref HEAD".split(),
-						cwd=os.path.join("..", "apps", self.app_name),
-					)
-				).strip("\n")
-				self.is_git_repo = True
-			else:
-				self.current_git_branch = None
-				self.is_git_repo = False
+			try:
+				with open(pkg_info_file, "r") as f:
+					app_data = f.readlines()
+				app_data = frappe.as_unicode("".join(app_data)).split("\n")
+				if "" in app_data:
+					app_data.remove("")
+				app_data = [x + "\n" for x in app_data]
+				for data in app_data:
+					if "Version:" in data:
+						self.version = "".join(re.findall("Version: (.*?)\\n", data))
+					elif "Summary:" in data:
+						self.app_description = "".join(re.findall("Summary: (.*?)\\n", data))
+					elif "Author:" in data:
+						self.app_publisher = "".join(re.findall("Author: (.*?)\\n", data))
+					elif "Author-email:" in data:
+						self.app_email = "".join(re.findall("Author-email: (.*?)\\n", data))
+			except Exception:
+				frappe.log_error(
+					title="Bench Manager App Metadata Error",
+					message=frappe.get_traceback(),
+				)
+		if os.path.isdir(os.path.join("..", "apps", self.app_name, ".git")):
+			self.current_git_branch = safe_decode(
+				check_output(
+					"git rev-parse --abbrev-ref HEAD".split(),
+					cwd=os.path.join("..", "apps", self.app_name),
+				)
+			).strip("\n")
+			self.is_git_repo = True
 		else:
-			frappe.throw(
-				"Hey developer, the app you're trying to create an \
-				instance of doesn't actually exist. You could consider setting \
-				developer flag to 0 to actually create the app"
-			)
+			self.current_git_branch = None
+			self.is_git_repo = False
 
 	@frappe.whitelist()
 	def pull_rebase(self, key, remote):
