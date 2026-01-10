@@ -46,7 +46,7 @@
 		dialog.$wrapper.find(".modal-dialog").css("width", "800px");
 
 		frappe.realtime.on(key, function (output) {
-			if (output && output.type === "progress") {
+			if (output && typeof output === "object" && output.type === "progress") {
 				var percent = Math.max(0, Math.min(100, output.percent || 0));
 				var label = output.label || output.stage || "";
 				progressWrapper.show();
@@ -54,6 +54,10 @@
 				progressBar.css("width", percent + "%");
 				progressBar.attr("aria-valuenow", percent);
 				progressBar.text(percent + "%");
+				return;
+			}
+
+			if (typeof output !== "string") {
 				return;
 			}
 

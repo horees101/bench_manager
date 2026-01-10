@@ -231,12 +231,10 @@ class Site(Document):
 @frappe.whitelist()
 def get_installable_apps(doctype, docname):
 	verify_whitelisted_call()
-	app_list_file = "apps.txt"
-	with open(app_list_file, "r") as f:
-		apps = f.read().split("\n")
+	available_apps = get_canonical_apps()
 	installed_apps = frappe.get_doc(doctype, docname).app_list.split("\n")
-	installable_apps = set(apps) - set(installed_apps)
-	return [x for x in installable_apps]
+	installable_apps = set(available_apps) - set(installed_apps)
+	return sorted([app for app in installable_apps if app])
 
 
 @frappe.whitelist()
@@ -245,8 +243,42 @@ def get_removable_apps(doctype, docname):
 	site = frappe.get_doc(doctype, docname)
 	if not site.app_list:
 		return []
-	removable_apps = [app for app in site.app_list.split("\n") if app and app != "frappe"]
-	return removable_apps
+	installed_apps = [app for app in site.app_list.split("\n") if app]
+	available_apps = set(get_canonical_apps())
+	removable_apps = [
+		app for app in installed_apps if app in available_apps and app != "frappe"
+	]
+	return sorted(removable_apps)
+
+
+def get_canonical_apps():
+	apps = get_apps_from_apps_txt()
+	if not apps:
+		apps = get_apps_from_apps_directory()
+	return [app for app in apps if app]
+
+
+def get_apps_from_apps_txt():
+	app_list_file = "apps.txt"
+	if not os.path.isfile(app_list_file):
+		return []
+	with open(app_list_file, "r") as f:
+		apps = f.read().split("\n")
+	return [app.strip() for app in apps if app.strip()]
+
+
+def get_apps_from_apps_directory():
+	apps_path = os.path.abspath(os.path.join("..", "apps"))
+	if not os.path.isdir(apps_path):
+		return []
+	apps = []
+	for name in sorted(os.listdir(apps_path)):
+		if name.startswith("."):
+			continue
+		app_path = os.path.join(apps_path, name)
+		if os.path.isdir(app_path):
+			apps.append(name)
+	return apps
 
 
 @frappe.whitelist()

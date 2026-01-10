@@ -1,6 +1,13 @@
 pre.console {
 	background-color: #36414C;
 	color: white;
-	padding: 10px;
+	padding: 12px 14px;
 	border-radius: 5px;
+	font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+		monospace;
+	font-size: 12px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	max-height: 360px;
+	overflow-y: auto;
 } 

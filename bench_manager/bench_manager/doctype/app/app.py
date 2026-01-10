@@ -80,6 +80,7 @@ class App(Document):
 				check_output(shlex.split("rm -r ../apps/{app_name}".format(app_name=self.app_name)))
 
 	def update_app_details(self):
+		self.app_title = self.app_name.replace("-", " ").replace("_", " ")
 		pkg_info_file = os.path.join(
 			"..",
 			"apps",
@@ -104,26 +105,17 @@ class App(Document):
 					self.app_publisher = "".join(re.findall("Author: (.*?)\\n", data))
 				elif "Author-email:" in data:
 					self.app_email = "".join(re.findall("Author-email: (.*?)\\n", data))
-			self.app_title = self.app_name
-			self.app_title = self.app_title.replace("-", " ")
-			self.app_title = self.app_title.replace("_", " ")
-			if os.path.isdir(os.path.join("..", "apps", self.app_name, ".git")):
-				self.current_git_branch = safe_decode(
-					check_output(
-						"git rev-parse --abbrev-ref HEAD".split(),
-						cwd=os.path.join("..", "apps", self.app_name),
-					)
-				).strip("\n")
-				self.is_git_repo = True
-			else:
-				self.current_git_branch = None
-				self.is_git_repo = False
+		if os.path.isdir(os.path.join("..", "apps", self.app_name, ".git")):
+			self.current_git_branch = safe_decode(
+				check_output(
+					"git rev-parse --abbrev-ref HEAD".split(),
+					cwd=os.path.join("..", "apps", self.app_name),
+				)
+			).strip("\n")
+			self.is_git_repo = True
 		else:
-			frappe.throw(
-				"Hey developer, the app you're trying to create an \
-				instance of doesn't actually exist. You could consider setting \
-				developer flag to 0 to actually create the app"
-			)
+			self.current_git_branch = None
+			self.is_git_repo = False
 
 	@frappe.whitelist()
 	def pull_rebase(self, key, remote):
