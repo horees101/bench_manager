@@ -78,6 +78,7 @@ def restore_backup(
 	key,
 ):
 	verify_whitelisted_call()
+	user = getattr(frappe.session, "user", None)
 	backup = frappe.get_doc("Site Backup", docname)
 	commands = []
 	password_suffix = "--admin-password {admin_password} --mariadb-root-password {mysql_password}".format(
@@ -112,5 +113,6 @@ def restore_backup(
 		doctype=doctype,
 		key=key,
 		docname=docname,
+		user=user,
 		retry_context={"progress_context": "restore"},
 	)

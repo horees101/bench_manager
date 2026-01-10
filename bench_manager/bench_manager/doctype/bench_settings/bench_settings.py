@@ -590,6 +590,7 @@ def setup_and_restart_nginx(root_password, key=None):
 	verify_whitelisted_call()
 	now = datetime.now()
 	dt_string = key or now.strftime("%Y/%m/%d, %H:%M:%S")
+	user = getattr(frappe.session, "user", None)
 	commands = ["bench setup nginx --yes"]
 	commands.append(f"echo '{root_password}' | sudo -S service nginx restart")
 	frappe.enqueue(
@@ -598,6 +599,7 @@ def setup_and_restart_nginx(root_password, key=None):
 		doctype="Bench Settings",
 		key=dt_string,
 		docname="Bench Settings",
+		user=user,
 	)
 	return {"status": "queued", "key": dt_string}
 

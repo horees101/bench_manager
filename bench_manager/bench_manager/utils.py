@@ -54,6 +54,7 @@ def run_command(
 	docname=" ",
 	after_command=None,
 	retry_context=None,
+	user=None,
 ):
 	verify_whitelisted_call()
 	if not commands:
@@ -65,7 +66,7 @@ def run_command(
 		frappe.throw("No commands provided for execution.")
 	original_docname = docname
 	docname = docname or doctype
-	user = getattr(frappe.session, "user", None) or "Administrator"
+	user = user or getattr(frappe.session, "user", None)
 	start_time = frappe.utils.time.time()
 	console_dump = ""
 	logged_command = " && ".join(commands)

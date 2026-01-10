@@ -224,6 +224,7 @@ class Site(Document):
 			doctype=self.doctype,
 			key=key,
 			docname=self.name,
+			user=user,
 		)
 		return "executed"
 
@@ -325,11 +326,19 @@ def verify_password(
 	db_root_password=None,
 ):
 	verify_whitelisted_call()
+	if not (db_host and db_port and db_root_user):
+		common_site_config_path = os.path.join("common_site_config.json")
+		if os.path.isfile(common_site_config_path):
+			with open(common_site_config_path, "r") as f:
+				common_site_config_data = json.load(f)
+			db_host = db_host or common_site_config_data.get("db_host")
+			db_port = db_port or common_site_config_data.get("db_port")
+			db_root_user = db_root_user or common_site_config_data.get("db_root_user")
 	root_password = db_root_password or mysql_password
 	if not root_password:
 		frappe.throw("MySQL password is required")
 	root_user = db_root_user or "root"
-	host = db_host or (frappe.conf.db_host or "localhost")
+	host = db_host or (frappe.conf.db_host or "127.0.0.1")
 	port = int(db_port or 3306)
 	try:
 		db = pymysql.connect(
@@ -399,6 +408,7 @@ def create_site(
 	db_root_password=None,
 ):
 	verify_whitelisted_call()
+	user = getattr(frappe.session, "user", None)
 	if (db_mode or "local") == "local" and not (db_root_password or mysql_password):
 		frappe.throw("MariaDB root password is required")
 	if (db_mode or "local") != "local":
@@ -434,6 +444,7 @@ def create_site(
 		key=key,
 		site_name=site_name,
 		docname="Bench Settings",
+		user=user,
 		retry_context={
 			"db_host": db_settings["db_host"],
 			"db_port": db_settings["db_port"],
@@ -445,7 +456,7 @@ def create_site(
 	)
 	return {"status": "queued", "site_name": site_name, "key": key}
 
-def jop_site_creation(commands, doctype, key, site_name, docname=None, **kwargs):
+def jop_site_creation(commands, doctype, key, site_name, docname=None, user=None, **kwargs):
 	from bench_manager.bench_manager.utils import run_command
 
 	run_command(
@@ -453,6 +464,7 @@ def jop_site_creation(commands, doctype, key, site_name, docname=None, **kwargs)
 		doctype=doctype,
 		key=key,
 		docname=docname or doctype,
+		user=user,
 		retry_context=kwargs.get("retry_context"),
 	)
 	normalize_site_config(site_name)
