@@ -215,10 +215,20 @@ def get_installable_apps(doctype, docname):
 @frappe.whitelist()
 def get_removable_apps(doctype, docname):
 	verify_whitelisted_call()
-	removable_apps = frappe.get_doc(doctype, docname).app_list.split("\n")
-	if "frappe" in removable_apps:
-		removable_apps.remove("frappe")
-	return removable_apps
+	site_name = docname
+	try:
+		installed_apps = frappe.get_installed_apps(site=site_name)
+	except Exception:
+		# fallback آمن
+		installed_apps = []
+
+	# defensive cleanup
+	installed_apps = [app for app in installed_apps if app]
+
+	# NEVER allow removing frappe
+	installed_apps = [app for app in installed_apps if app != "frappe"]
+
+	return installed_apps
 
 
 @frappe.whitelist()
