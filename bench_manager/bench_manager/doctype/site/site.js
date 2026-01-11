@@ -184,12 +184,37 @@ frappe.ui.form.on('Site', {
 				},
 				btn: this,
 				callback: function(r) {
+					console.log('Uninstall App response:', r && r.message);
+					const response = (r && r.message) ? r.message : [];
+					const normalized = response.map((item) => {
+						if (typeof item === 'string') {
+							return { label: item, value: item };
+						}
+						if (item && typeof item === 'object') {
+							const label = item.label || item.value;
+							const value = item.value || item.label;
+							if (label && value) {
+								return { label, value };
+							}
+						}
+						return null;
+					}).filter(Boolean);
+					if (!normalized.length) {
+						frappe.msgprint(__('No removable apps found for this site.'));
+						return;
+					}
 					var dialog = new frappe.ui.Dialog({
 						title: __('Select app'),
 						fields: [
-							{'fieldname': 'removable_apps', 'fieldtype': 'Select', options: r.message},
+							{'fieldname': 'removable_apps', 'fieldtype': 'Select', options: []},
 						]
 					});
+					dialog.set_df_property(
+						'removable_apps',
+						'options',
+						normalized.map((item) => item.value)
+					);
+					dialog.fields_dict.removable_apps.refresh();
 					dialog.set_primary_action(__('Uninstall App'), () => {
 						let key = frappe.datetime.get_datetime_as_string();
 						withConsoleDialog(key, () => {
@@ -201,6 +226,11 @@ frappe.ui.form.on('Site', {
 								dialog.hide();
 							});
 						});
+					});
+					const primary_btn = dialog.get_primary_btn();
+					primary_btn.prop('disabled', true);
+					dialog.fields_dict.removable_apps.$input.on('change', () => {
+						primary_btn.prop('disabled', !dialog.fields_dict.removable_apps.value);
 					});
 					dialog.show();
 				}
