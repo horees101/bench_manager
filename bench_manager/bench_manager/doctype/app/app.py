@@ -66,13 +66,11 @@ class App(Document):
 			apps_file = "apps.txt"
 			with open(apps_file, "r") as f:
 				apps = f.readlines()
-			try:
-				apps.remove(self.app_name)
-			except:
-				try:
-					apps.remove(self.app_name + "\n")
-				except:
-					pass
+			apps = [
+				app
+				for app in apps
+				if app not in {self.app_name, "{app_name}\n".format(app_name=self.app_name)}
+			]
 			os.remove(apps_file)
 			with open(apps_file, "w") as f:
 				f.writelines(apps)
@@ -93,7 +91,7 @@ class App(Document):
 				app_data = f.readlines()
 			app_data = frappe.as_unicode("".join(app_data)).split("\n")
 			if "" in app_data:
-				app_data.remove("")
+				app_data = [line for line in app_data if line != ""]
 			app_data = [x + "\n" for x in app_data]
 			for data in app_data:
 				if "Version:" in data:
@@ -172,8 +170,10 @@ def get_branches(doctype, docname, current_branch):
 	verify_whitelisted_call()
 	app_path = os.path.join("..", "apps", docname)  #'../apps/'+docname
 	branches = (check_output("git branch".split(), cwd=app_path)).split()
-	branches.remove("*")
-	branches.remove(current_branch)
+	if "*" in branches:
+		branches.remove("*")
+	if current_branch in branches:
+		branches.remove(current_branch)
 	return branches
 
 

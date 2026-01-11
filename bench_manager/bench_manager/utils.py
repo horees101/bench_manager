@@ -9,7 +9,10 @@ import random
 import re
 import shlex
 import time
-from subprocess import PIPE, STDOUT, Popen
+import traceback
+from queue import Empty, Queue
+from threading import Thread
+from subprocess import PIPE, Popen
 import frappe
 import pymysql
 from frappe.model.document import Document
@@ -22,6 +25,40 @@ class CommandFailed(Exception):
 		self.console_dump = console_dump
 
 
+def _timestamp():
+	return frappe.utils.now_datetime().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _format_log_line(message, stream="info"):
+	# Prefix log lines to make console output honest and traceable.
+	return "[{timestamp}] [{stream}] {message}\n".format(
+		timestamp=_timestamp(), stream=stream, message=message.rstrip("\n")
+	)
+
+
+def _append_console_log(key, user, console_dump, message, stream="info"):
+	formatted_line = _format_log_line(message, stream=stream)
+	frappe.publish_realtime(key, formatted_line, user=user)
+	return console_dump + formatted_line
+
+
+def _create_command_record(doctype, key, docname, logged_command, console_dump):
+	# Create a command log up front so users always see the command metadata.
+	cmd = frappe.get_doc(
+		{
+			"doctype": "Bench Manager Command",
+			"key": key,
+			"source": doctype + ": " + docname,
+			"command": logged_command,
+			"console": console_dump,
+			"status": "Ongoing",
+		}
+	)
+	cmd.insert()
+	frappe.db.commit()
+	return cmd
+
+
 def run_command(
 	commands, doctype, key, cwd="..", docname=" ", after_command=None, retry_context=None
 ):
@@ -32,41 +69,28 @@ def run_command(
 	start_time = frappe.utils.time.time()
 	console_dump = ""
 	logged_command = " && ".join(commands)
-	logged_command += (
-		" "  # to make sure passwords at the end of the commands are also hidden
-	)
-	sensitive_data = [
-		"--mariadb-root-password",
-		"--admin-password",
-		"--root-password",
-		"--db-password",
-	]
-	for password in sensitive_data:
-		logged_command = re.sub(
-			"{password} .*? ".format(password=password), "", logged_command, flags=re.DOTALL
-		)
-	doc = frappe.get_doc(
-		{
-			"doctype": "Bench Manager Command",
-			"key": key,
-			"source": doctype + ": " + docname,
-			"command": logged_command,
-			"console": console_dump,
-			"status": "Ongoing",
-		}
-	)
-	doc.insert()
-	frappe.db.commit()
-	frappe.publish_realtime(
+	_create_command_record(doctype, key, docname, logged_command, console_dump)
+	console_dump = _append_console_log(
 		key,
-		"Executing Command:\n{logged_command}\n\n".format(logged_command=logged_command),
-		user=user,
+		user,
+		console_dump,
+		"Executing Command(s): {logged_command}".format(logged_command=logged_command),
 	)
 	try:
 		if doctype == "Site" and original_docname and original_docname.strip():
 			normalize_site_config(original_docname)
 		progress_context = (retry_context or {}).get("progress_context")
 		for command in commands:
+			console_dump = _append_console_log(
+				key, user, console_dump, "Working directory: {cwd}".format(cwd=cwd)
+			)
+			console_dump = _append_console_log(
+				key,
+				user,
+				console_dump,
+				"Environment: inherited from bench process",
+			)
+			console_dump = _validate_uninstall_app_command(command, console_dump, key, user)
 			if _is_new_site_command(command):
 				console_dump = _run_new_site_with_retry(
 					command,
@@ -93,13 +117,18 @@ def run_command(
 	except Exception as e:
 		if isinstance(e, CommandFailed):
 			console_dump = e.console_dump
-		_close_the_doc(
-			start_time,
+		traceback_text = traceback.format_exc()
+		console_dump = _append_console_log(
 			key,
-			"{} \n\n{}".format(e, console_dump),
-			status="Failed",
-			user=user,
+			user,
+			console_dump,
+			"Command failed with traceback:\n{traceback_text}".format(
+				traceback_text=traceback_text
+			),
+			stream="error",
 		)
+		_close_the_doc(start_time, key, console_dump, status="Failed", user=user)
+		raise
 	finally:
 		frappe.db.commit()
 		# hack: frappe.db.commit() to make sure the log created is robust,
@@ -174,14 +203,62 @@ def normalize_site_config(site_name):
 
 
 def _run_single_command(command, key, user, cwd, console_dump):
-	terminal = Popen(
-		shlex.split(command), stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=cwd
+	console_dump = _append_console_log(
+		key, user, console_dump, "Running command: {command}".format(command=command)
 	)
-	for c in iter(lambda: safe_decode(terminal.stdout.read(1)), ""):
-		frappe.publish_realtime(key, c, user=user)
-		console_dump += str(c)
+	terminal = Popen(
+		shlex.split(command), stdin=PIPE, stdout=PIPE, stderr=PIPE, cwd=cwd, text=True
+	)
+	stdout_queue = Queue()
+	stderr_queue = Queue()
 
-	if terminal.wait():
+	def _enqueue_stream(stream, queue, stream_name):
+		for line in iter(stream.readline, ""):
+			queue.put((stream_name, line))
+		stream.close()
+
+	stdout_thread = Thread(
+		target=_enqueue_stream, args=(terminal.stdout, stdout_queue, "stdout"), daemon=True
+	)
+	stderr_thread = Thread(
+		target=_enqueue_stream, args=(terminal.stderr, stderr_queue, "stderr"), daemon=True
+	)
+	stdout_thread.start()
+	stderr_thread.start()
+
+	while True:
+		processed = False
+		for queue in (stdout_queue, stderr_queue):
+			try:
+				stream_name, line = queue.get(timeout=0.1)
+				console_dump = _append_console_log(
+					key, user, console_dump, line, stream=stream_name
+				)
+				processed = True
+			except Empty:
+				continue
+		if terminal.poll() is not None and not processed:
+			break
+
+	stdout_thread.join(timeout=1)
+	stderr_thread.join(timeout=1)
+	for queue in (stdout_queue, stderr_queue):
+		while True:
+			try:
+				stream_name, line = queue.get_nowait()
+				console_dump = _append_console_log(
+					key, user, console_dump, line, stream=stream_name
+				)
+			except Empty:
+				break
+	exit_code = terminal.wait()
+	console_dump = _append_console_log(
+		key,
+		user,
+		console_dump,
+		"Command exited with code {exit_code}".format(exit_code=exit_code),
+	)
+	if exit_code:
 		raise CommandFailed(command, console_dump)
 	return console_dump
 
@@ -243,10 +320,12 @@ def _refresh_mariadb_grants(retry_context, key, user):
 			"\nRefreshed MariaDB privileges before retry.\n",
 			user=user,
 		)
-	except Exception:
+	except Exception as error:
 		frappe.publish_realtime(
 			key,
-			"\nUnable to refresh MariaDB privileges; retrying anyway.\n",
+			"\nUnable to refresh MariaDB privileges; retrying anyway. Error: {error}\n".format(
+				error=error
+			),
 			user=user,
 		)
 
@@ -266,6 +345,76 @@ def _swap_mariadb_login_scope(command, retry_context):
 
 def _is_new_site_command(command):
 	return command.strip().startswith("bench new-site ")
+
+
+def _parse_uninstall_app_command(command):
+	try:
+		parts = shlex.split(command)
+	except ValueError:
+		return None, None
+	if "uninstall-app" not in parts:
+		return None, None
+	app_index = parts.index("uninstall-app") + 1
+	app_name = parts[app_index] if app_index < len(parts) else None
+	site_name = None
+	if "--site" in parts:
+		site_index = parts.index("--site") + 1
+		if site_index < len(parts):
+			site_name = parts[site_index]
+	return site_name, app_name
+
+
+def _get_installed_apps_for_site(site_name, key=None, user=None, console_dump=""):
+	installed_apps = []
+	site_config_path = os.path.join(
+		frappe.utils.get_bench_path(), "sites", site_name, "site_config.json"
+	)
+	if os.path.exists(site_config_path):
+		with open(site_config_path, "r") as f:
+			site_config = json.load(f)
+			site_installed_apps = site_config.get("installed_apps") or []
+			if isinstance(site_installed_apps, list):
+				installed_apps.extend(site_installed_apps)
+
+	try:
+		frappe_installed_apps = frappe.get_installed_apps(site=site_name)
+		if frappe_installed_apps:
+			installed_apps.extend(frappe_installed_apps)
+	except Exception as error:
+		if key and user:
+			console_dump = _append_console_log(
+				key,
+				user,
+				console_dump,
+				"Unable to read installed apps via frappe.get_installed_apps: {error}".format(
+					error=error
+				),
+				stream="error",
+			)
+	installed_apps = [app for app in installed_apps if app]
+	return list(dict.fromkeys(installed_apps)), console_dump
+
+
+def _validate_uninstall_app_command(command, console_dump, key, user):
+	site_name, app_name = _parse_uninstall_app_command(command)
+	if not site_name or not app_name:
+		return console_dump
+	# Guard against uninstalling apps that are not installed to keep the command idempotent.
+	installed_apps, console_dump = _get_installed_apps_for_site(
+		site_name, key=key, user=user, console_dump=console_dump
+	)
+	if app_name not in installed_apps:
+		console_dump = _append_console_log(
+			key,
+			user,
+			console_dump,
+			"App {app_name} is not installed on site {site_name}".format(
+				app_name=app_name, site_name=site_name
+			),
+			stream="error",
+		)
+		raise CommandFailed(command, console_dump)
+	return console_dump
 
 
 def _should_retry_mariadb(error_text, console_dump):
@@ -291,7 +440,8 @@ def verify_whitelisted_call():
 
 def safe_decode(string, encoding="utf-8"):
 	try:
-		string = string.decode(encoding)
+		return string.decode(encoding)
+	except AttributeError:
+		return string
 	except Exception:
-		pass
-	return string
+		return string
